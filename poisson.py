@@ -100,13 +100,17 @@ class MotorPoisson:
         media_casa = media_gols_liga * self.FATOR_CASA
         media_fora = media_gols_liga * self.FATOR_FORA
 
-        # Forças normalizadas
-        atk_casa = (gm_casa / j_casa) / media_casa
-        def_casa = (gc_casa / j_casa) / media_fora
-        atk_fora = (gm_fora / j_fora) / media_fora
-        def_fora = (gc_fora / j_fora) / media_casa
+        # Forças normalizadas pela média da LIGA (sem fator casa embutido).
+        # Bug anterior: normalizar por media_casa/media_fora fazia o fator
+        # casa entrar duas vezes (uma na normalização, outra na multiplicação
+        # final) e se cancelar — o mandante podia até sair como azarão contra
+        # um time estatisticamente idêntico.
+        atk_casa = (gm_casa / j_casa) / media_gols_liga
+        def_casa = (gc_casa / j_casa) / media_gols_liga
+        atk_fora = (gm_fora / j_fora) / media_gols_liga
+        def_fora = (gc_fora / j_fora) / media_gols_liga
 
-        # Expected Goals ajustados
+        # Expected Goals ajustados — fator casa aplicado uma única vez aqui
         xg_casa = atk_casa * def_fora * media_casa * fator_qualitativo_casa
         xg_fora = atk_fora * def_casa * media_fora * fator_qualitativo_fora
 

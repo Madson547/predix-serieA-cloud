@@ -3,6 +3,7 @@ import pandas as pd
 from datetime import datetime, timedelta
 from database import supabase
 from poisson import MotorPoisson
+from qualitativo import calcular_fator_qualitativo, buscar_noticias_recentes
 
 st.set_page_config(layout="wide", page_title="Predix Sports")
 
@@ -64,10 +65,17 @@ def analisar_confronto(casa, fora):
     tf = buscar_time(fora)
     if not tc or not tf:
         return None
+
+    noticias = buscar_noticias_recentes(50)
+    fq_casa = calcular_fator_qualitativo(casa, tc, noticias)
+    fq_fora = calcular_fator_qualitativo(fora, tf, noticias)
+
     resultado = motor.calcular(
         time_casa=casa, time_fora=fora,
         gm_casa=tc["gm"], gc_casa=tc["gc"], j_casa=tc["j"],
         gm_fora=tf["gm"], gc_fora=tf["gc"], j_fora=tf["j"],
+        fator_qualitativo_casa=fq_casa,
+        fator_qualitativo_fora=fq_fora,
     )
     return resultado
 
