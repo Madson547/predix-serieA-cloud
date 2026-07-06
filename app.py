@@ -1,6 +1,6 @@
 import streamlit as st
 import pandas as pd
-from datetime import datetime, timedelta
+from datetime import datetime
 from database import supabase
 from poisson import MotorPoisson
 from qualitativo import calcular_fator_qualitativo, buscar_noticias_recentes
@@ -19,11 +19,8 @@ MEDALHAS = ["🥇", "🥈", "🥉"]
 
 @st.cache_data(ttl=300)
 def carregar_partidas():
-    hoje = datetime.now().strftime("%Y-%m-%d")
-    limite = (datetime.now() + timedelta(days=3)).strftime("%Y-%m-%d")
     resp = (
         supabase.table("jogos").select("*")
-        .gte("data", hoje).lte("data", limite)
         .order("data").execute()
     )
     return resp.data

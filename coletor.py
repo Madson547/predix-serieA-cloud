@@ -5,6 +5,7 @@
 # ==========================================================
 
 import os
+import re
 import time
 from datetime import datetime
 import requests
@@ -100,12 +101,70 @@ def salvar_times(times: list):
 
 
 # ==========================================================
+# RODADA ATUAL
+# ==========================================================
+
+def _numero_da_rodada(rodada: dict):
+    """
+    A API tem um 'id' interno (ex: 176) que NÃO é o número da rodada.
+    O número real geralmente vem no campo 'rodada_numero'/'numero', ou
+    pode ser extraído do nome (ex: '4ª Rodada' -> 4).
+    """
+    for campo in ("rodada_numero", "numero", "rodada"):
+        val = rodada.get(campo)
+        if isinstance(val, int):
+            return val
+    nome = rodada.get("nome") or ""
+    m = re.search(r"(\d+)", nome)
+    if m:
+        return int(m.group(1))
+    return None
+
+
+def buscar_numero_rodada_atual() -> int | None:
+    """
+    Busca as rodadas do campeonato e identifica a que está em andamento
+    (ou a próxima, se nenhuma estiver rolando agora). Sem isso, buscar
+    partidas sem filtro de rodada devolve a primeira página cronológica
+    (jogos do início da temporada, não os atuais).
+    """
+    data = _get(f"/campeonatos/{CAMPEONATO_ID}/rodadas")
+    rodadas = data.get("data", [])
+
+    for r in rodadas:
+        status = (r.get("status") or "").lower()
+        if "andamento" in status or "atual" in status:
+            numero = _numero_da_rodada(r)
+            print(f"[API] Rodada atual: {r.get('nome')} (numero={numero})")
+            return numero
+
+    for r in rodadas:
+        status = (r.get("status") or "").lower()
+        if "proxima" in status or "agendada" in status:
+            numero = _numero_da_rodada(r)
+            print(f"[API] Próxima rodada: {r.get('nome')} (numero={numero})")
+            return numero
+
+    print("[API] Não foi possível identificar a rodada atual.")
+    return None
+
+
+# ==========================================================
 # PARTIDAS -> tabela "jogos"
 # ==========================================================
 
 def buscar_partidas() -> list:
-    data = _get(f"/campeonatos/{CAMPEONATO_ID}/partidas")
+    numero_rodada = buscar_numero_rodada_atual()
+    params = {"rodada": numero_rodada} if numero_rodada else None
+
+    data = _get(f"/campeonatos/{CAMPEONATO_ID}/partidas", params=params)
     partidas_raw = data.get("data", [])
+
+    # Fallback: se filtrar por rodada não trouxer nada, tenta sem filtro
+    if not partidas_raw and numero_rodada:
+        print("[API] Nada na rodada filtrada, tentando sem filtro...")
+        data = _get(f"/campeonatos/{CAMPEONATO_ID}/partidas")
+        partidas_raw = data.get("data", [])
 
     jogos = []
     for p in partidas_raw:
