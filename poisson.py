@@ -43,6 +43,10 @@ class ResultadoPoisson:
     cantos_ht: float
     cantos_ft: float
     cartoes_ft: float
+    linha_cantos: float
+    prob_over_cantos: float
+    linha_cartoes: float
+    prob_over_cartoes: float
 
     # Placar mais provável
     placar_mais_provavel: str
@@ -160,6 +164,16 @@ class MotorPoisson:
             min(max(cartoes_casa + cartoes_fora + equilibrio, 3.0), 7.0), 1
         )
 
+        # Probabilidade de "mais de X.5" escanteios/cartões, tratando a
+        # estimativa (cantos_ft/cartoes_ft) como média de uma Poisson.
+        # Aproximação: escanteios e cartões não seguem Poisson tão bem
+        # quanto gols, mas serve como referência de mercado razoável.
+        linha_cantos = self._linha_media(cantos_ft)
+        prob_over_cantos = self._prob_over_poisson(cantos_ft, linha_cantos) * 100
+
+        linha_cartoes = self._linha_media(cartoes_ft)
+        prob_over_cartoes = self._prob_over_poisson(cartoes_ft, linha_cartoes) * 100
+
         # Placar mais provável
         placar, prob_placar = self._placar_mais_provavel(matriz)
 
@@ -190,6 +204,10 @@ class MotorPoisson:
             cantos_ht=cantos_ht,
             cantos_ft=cantos_ft,
             cartoes_ft=cartoes_ft,
+            linha_cantos=linha_cantos,
+            prob_over_cantos=round(prob_over_cantos, 1),
+            linha_cartoes=linha_cartoes,
+            prob_over_cartoes=round(prob_over_cartoes, 1),
             placar_mais_provavel=placar,
             prob_placar_mais_provavel=round(prob_placar * 100, 1),
             odd_casa=_odd_justa(p_casa),
@@ -198,6 +216,18 @@ class MotorPoisson:
             odd_btts=_odd_justa(p_btts),
             odd_over25=_odd_justa(over25_ft),
         )
+
+    def _linha_media(self, media: float) -> float:
+        """Converte uma média (ex: 9.3) na linha de mercado mais próxima,
+        sempre terminada em .5 (ex: 9.5) — como as casas de apostas fazem,
+        pra nunca ter empate exato na linha. floor(media)+0.5 é sempre a
+        linha .5 mais próxima da média (nunca a de baixo)."""
+        return int(np.floor(media)) + 0.5
+
+    def _prob_over_poisson(self, media: float, linha: float) -> float:
+        """P(X > linha), tratando X ~ Poisson(media)."""
+        limite = int(np.floor(linha))
+        return float(1.0 - poisson.cdf(limite, max(media, 0.1)))
 
     def _build_matriz(self, xg_casa: float, xg_fora: float) -> np.ndarray:
         n = self.MAX_GOLS

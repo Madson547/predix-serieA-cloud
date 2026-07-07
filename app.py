@@ -1,6 +1,5 @@
 import streamlit as st
 import pandas as pd
-from datetime import datetime
 from database import supabase
 from poisson import MotorPoisson
 from qualitativo import calcular_fator_qualitativo, buscar_noticias_recentes
@@ -77,18 +76,76 @@ def analisar_confronto(casa, fora):
     return resultado
 
 
-def registrar_aposta(mercado, probabilidade):
-    try:
-        supabase.table("apostas").insert({
-            "mercado": mercado,
-            "probabilidade": float(probabilidade) if probabilidade else None,
-            "resultado": "Pendente",
-            "data": datetime.now().isoformat(),
-        }).execute()
-        return True
-    except Exception as e:
-        st.error(f"Erro ao registrar: {e}")
-        return False
+def montar_mercados(resultado, casa, fora):
+    """
+    Um mercado por categoria (evita combinar mercados redundantes ou
+    contraditórios, tipo 'Mais de 1.5' com 'Mais de 2.5' na mesma múltipla).
+    """
+    mercados = {}
+
+    candidatos_resultado = [
+        (f"Vitória {casa}", resultado.prob_casa),
+        ("Empate", resultado.prob_empate),
+        (f"Vitória {fora}", resultado.prob_fora),
+        (f"Dupla Chance: {casa} ou Empate", resultado.prob_dupla_1x),
+        (f"Dupla Chance: {fora} ou Empate", resultado.prob_dupla_x2),
+    ]
+    mercados["resultado"] = dict(zip(("nome", "prob"), max(candidatos_resultado, key=lambda x: x[1])))
+
+    candidatos_gols = [
+        ("Mais de 1.5 Gols", resultado.over15_ft),
+        ("Menos de 1.5 Gols", 100 - resultado.over15_ft),
+        ("Mais de 2.5 Gols", resultado.over25_ft),
+        ("Menos de 2.5 Gols", 100 - resultado.over25_ft),
+    ]
+    mercados["gols"] = dict(zip(("nome", "prob"), max(candidatos_gols, key=lambda x: x[1])))
+
+    if resultado.prob_btts >= 50:
+        mercados["btts"] = {"nome": "Ambas Marcam (Sim)", "prob": resultado.prob_btts}
+    else:
+        mercados["btts"] = {"nome": "Ambas Marcam (Não)", "prob": 100 - resultado.prob_btts}
+
+    if resultado.prob_over_cantos >= 50:
+        mercados["escanteios"] = {"nome": f"Mais de {resultado.linha_cantos} Escanteios", "prob": resultado.prob_over_cantos}
+    else:
+        mercados["escanteios"] = {"nome": f"Menos de {resultado.linha_cantos} Escanteios", "prob": 100 - resultado.prob_over_cantos}
+
+    if resultado.prob_over_cartoes >= 50:
+        mercados["cartoes"] = {"nome": f"Mais de {resultado.linha_cartoes} Cartões", "prob": resultado.prob_over_cartoes}
+    else:
+        mercados["cartoes"] = {"nome": f"Menos de {resultado.linha_cartoes} Cartões", "prob": 100 - resultado.prob_over_cartoes}
+
+    return mercados
+
+
+def gerar_multiplas(resultado, casa, fora):
+    mercados = montar_mercados(resultado, casa, fora)
+
+    combos = [
+        ("Múltipla 1 — Mais Segura", ["resultado", "gols"]),
+        ("Múltipla 2 — Equilibrada", ["resultado", "gols", "btts"]),
+        ("Múltipla 3 — Mercados Alternativos", ["gols", "escanteios", "cartoes"]),
+        ("Múltipla 4 — Mais Arriscada", ["resultado", "gols", "btts", "escanteios"]),
+    ]
+
+    multiplas = []
+    for titulo, categorias in combos:
+        pernas = [mercados[c] for c in categorias if c in mercados]
+        if not pernas:
+            continue
+        prob_combinada = 1.0
+        for p in pernas:
+            prob_combinada *= (p["prob"] / 100)
+        prob_combinada *= 100
+        odd_justa = round(100 / prob_combinada, 2) if prob_combinada > 0 else None
+        multiplas.append({
+            "titulo": titulo,
+            "pernas": pernas,
+            "prob_combinada": round(prob_combinada, 1),
+            "odd_justa": odd_justa,
+        })
+
+    return multiplas
 
 
 def colorir_tabela(row):
@@ -109,14 +166,15 @@ if not partidas:
 
 lista_confrontos = [f"{j['casa_nome']} x {j['fora_nome']}" for j in partidas]
 
-aba_painel, aba_tabela, aba_performance = st.tabs([
+aba_painel, aba_multiplas, aba_tabela, aba_performance = st.tabs([
     "📊 Painel Analítico",
+    "🎰 Sugestões de Múltiplas",
     "🏆 Tabela de Classificação",
     "📈 Medidor de Desempenho"
 ])
 
 with aba_painel:
-    st.markdown("## ⚽ Predix Sports — Análise Quantitativa Série B 2026")
+    st.markdown("## ⚽ Predix Sports — Análise Quantitativa Série A 2026")
     col1, col2 = st.columns([1.5, 1.5])
 
     with col1:
@@ -145,21 +203,11 @@ with aba_painel:
             st.info(f"🤝 Ambas Marcam: {resultado.prob_btts}%")
             st.success(f"🟩 Gols FT (>1.5): {resultado.over15_ft}%")
             st.success(f"🟩 Gols FT (>2.5): {resultado.over25_ft}%")
-            st.warning(f"🟫 Escanteios FT (estimado): {resultado.cantos_ft} cantos")
-            st.error(f"🟥 Cartões FT (estimado): {resultado.cartoes_ft} cartões")
+            st.warning(f"🟫 Escanteios FT: média {resultado.cantos_ft} | Mais de {resultado.linha_cantos}: {resultado.prob_over_cantos}%")
+            st.error(f"🟥 Cartões FT: média {resultado.cartoes_ft} | Mais de {resultado.linha_cartoes}: {resultado.prob_over_cartoes}%")
             st.info(f"🏆 Placar mais provável: **{resultado.placar_mais_provavel}**")
         else:
             st.warning("Análise não disponível — time não encontrado no banco.")
-
-        st.markdown("---")
-        st.markdown("### 🚀 Registrar na Banca")
-        mercado = st.radio("Mercado:", [
-            f"Vitória {jogo['casa_nome']}", "Empate", f"Vitória {jogo['fora_nome']}",
-            "Ambas Marcam", "Mais de 1.5 Gols", "Mais de 2.5 Gols"
-        ])
-        if st.button("💾 Gravar Palpite"):
-            if registrar_aposta(f"{confronto_sel} - {mercado}", 0):
-                st.success("✅ Palpite registrado!")
 
     with col2:
         st.markdown("### 📅 Próximos Jogos")
@@ -171,9 +219,41 @@ with aba_painel:
                 f"{status_icon} {j.get('status_desc','Agendado')}"
             )
 
+with aba_multiplas:
+    st.markdown("## 🎰 Sugestões de Múltiplas")
+    st.caption(f"Confronto: **{jogo['casa_nome']} x {jogo['fora_nome']}**")
+    st.caption(
+        "⚠️ A probabilidade combinada assume que os mercados são independentes entre si — "
+        "na prática alguns se correlacionam (ex: Mais de 2.5 Gols tende a andar junto com "
+        "Ambas Marcam), então trate como referência, não como certeza matemática exata."
+    )
+    st.markdown("---")
+
+    if resultado:
+        multiplas = gerar_multiplas(resultado, jogo['casa_nome'], jogo['fora_nome'])
+        cores = ["#1b4332", "#123a4a", "#4a3b1b", "#4a1919"]
+        for i, m in enumerate(multiplas):
+            cor = cores[i % len(cores)]
+            pernas_html = "".join(
+                f'<div style="padding:3px 0;">✅ {p["nome"]} <span style="opacity:0.7;">({p["prob"]:.1f}%)</span></div>'
+                for p in m["pernas"]
+            )
+            odd_html = f" &nbsp;|&nbsp; Odd Justa: <b>{m['odd_justa']}</b>" if m["odd_justa"] else ""
+            st.markdown(f"""
+            <div style="background:{cor}; border-radius:10px; padding:16px 20px; margin-bottom:14px;">
+              <div style="font-weight:bold; font-size:17px; margin-bottom:10px;">{m['titulo']}</div>
+              {pernas_html}
+              <div style="margin-top:12px; font-size:15px;">
+                📊 Probabilidade de bater: <b>{m['prob_combinada']}%</b>{odd_html}
+              </div>
+            </div>
+            """, unsafe_allow_html=True)
+    else:
+        st.warning("Análise não disponível — time não encontrado no banco.")
+
 with aba_tabela:
-    st.subheader("🏆 Classificação — Brasileirão Série B 2026")
-    st.caption("🟩 Zona de acesso à Série A (1º–4º) · 🟥 Zona de rebaixamento à Série C (17º–20º)")
+    st.subheader("🏆 Classificação — Brasileirão Série A 2026")
+    st.caption("🟩 Classificação para Libertadores (1º–4º) · 🟥 Zona de rebaixamento à Série B (17º–20º)")
     if tabela:
         df = pd.DataFrame(tabela)
         colunas = ["posicao", "nome", "pts", "j", "v", "e", "d", "gm", "gc", "sg"]
