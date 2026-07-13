@@ -123,29 +123,54 @@ def _numero_da_rodada(rodada: dict):
 
 def buscar_numero_rodada_atual() -> int | None:
     """
-    Busca as rodadas do campeonato e identifica a que está em andamento
-    (ou a próxima, se nenhuma estiver rolando agora). Sem isso, buscar
-    partidas sem filtro de rodada devolve a primeira página cronológica
-    (jogos do início da temporada, não os atuais).
+    Identifica a rodada atual do campeonato.
+
+    IMPORTANTE (bug confirmado em 2026-07 via diagnostico_rodada.py):
+    a API às vezes deixa uma rodada ANTIGA com status 'andamento'
+    desatualizado — ex: a "4ª Rodada" aparecia como 'andamento' mesmo
+    com as rodadas 5 a 18 já 'encerrada' depois dela. Se confiarmos
+    cegamente em status=='andamento', ficamos travados numa rodada
+    velha pra sempre.
+
+    Por isso a rodada atual é calculada como "a rodada seguinte à
+    última rodada encerrada, em sequência a partir da rodada 1" — não
+    depende da flag 'andamento' da API, só da sequência real de rodadas
+    já encerradas. Isso é resistente a esse tipo de flag desatualizada.
     """
     data = _get(f"/campeonatos/{CAMPEONATO_ID}/rodadas")
     rodadas = data.get("data", [])
 
+    numeradas = []
     for r in rodadas:
+        numero = _numero_da_rodada(r)
         status = (r.get("status") or "").lower()
-        if "andamento" in status or "atual" in status:
-            numero = _numero_da_rodada(r)
-            print(f"[API] Rodada atual: {r.get('nome')} (numero={numero})")
+        if numero is not None:
+            numeradas.append((numero, status, r.get("nome")))
+
+    if not numeradas:
+        print("[API] Não foi possível identificar a rodada atual (sem dados numerados).")
+        return None
+
+    numeradas.sort(key=lambda item: item[0])
+
+    ultima_encerrada = 0
+    for numero, status, _ in numeradas:
+        if "encerrada" in status or "encerrado" in status:
+            ultima_encerrada = max(ultima_encerrada, numero)
+
+    candidato = ultima_encerrada + 1
+    if any(numero == candidato for numero, _, _ in numeradas):
+        print(f"[API] Rodada atual calculada: {candidato}ª Rodada (última encerrada: {ultima_encerrada}ª)")
+        return candidato
+
+    # Fallback: candidato não existe na lista por algum motivo — usa a
+    # primeira rodada 'agendada' encontrada.
+    for numero, status, nome in numeradas:
+        if "agendada" in status or "agendado" in status:
+            print(f"[API] Fallback — primeira rodada agendada encontrada: {nome}")
             return numero
 
-    for r in rodadas:
-        status = (r.get("status") or "").lower()
-        if "proxima" in status or "agendada" in status:
-            numero = _numero_da_rodada(r)
-            print(f"[API] Próxima rodada: {r.get('nome')} (numero={numero})")
-            return numero
-
-    print("[API] Não foi possível identificar a rodada atual.")
+    print("[API] Não foi possível identificar a rodada atual com segurança.")
     return None
 
 
