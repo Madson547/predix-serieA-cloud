@@ -107,23 +107,68 @@ def calcular_sentimento_time(nome: str, noticias: list) -> float:
 
 
 # ==========================================================
+# AJUSTE QUALITATIVO MANUAL (planilha -> tabela ajustes_qualitativos)
+# ==========================================================
+
+def buscar_ajuste_manual(time_casa: str, time_fora: str, data_jogo: str | None = None) -> dict | None:
+    """
+    Busca o registro de ajuste qualitativo manual (preenchido na planilha
+    predix_dados_qualitativos.xlsx e importado via importar_qualitativos.py)
+    para o confronto exato entre time_casa e time_fora.
+
+    Casamento por nome (case-insensitive) + data quando informada. Sem data,
+    ou se não achar pela data exata, cai para o registro mais recente
+    cadastrado para esse confronto — evita ficar sem ajuste só porque a
+    data no Supabase não bateu 100% com a da tabela 'jogos'.
+    """
+    try:
+        base = supabase.table("ajustes_qualitativos").select("*") \
+            .ilike("time_casa", time_casa).ilike("time_fora", time_fora)
+
+        if data_jogo:
+            resp = base.eq("data", data_jogo).order("data", desc=True).limit(1).execute()
+            if resp.data:
+                return resp.data[0]
+
+        resp = base.order("data", desc=True).limit(1).execute()
+        return resp.data[0] if resp.data else None
+    except Exception as e:
+        print(f"[ERRO] buscar_ajuste_manual: {e}")
+        return None
+
+
+# ==========================================================
 # FATOR QUALITATIVO COMBINADO -> MotorPoisson
 # ==========================================================
 
-def calcular_fator_qualitativo(nome_time: str, dados_time: dict | None, noticias: list) -> float:
+def calcular_fator_qualitativo(
+    nome_time: str,
+    dados_time: dict | None,
+    noticias: list,
+    ajuste_manual: float | None = None,
+) -> float:
     """
-    Combina eficiência de conversão + sentimento de notícias num único
-    multiplicador para o MotorPoisson (fator_qualitativo_casa/fora).
-    1.0 = neutro (comportamento padrão, quando não há dado nenhum).
-    Faixa final: 0.80 a 1.20.
+    Combina eficiência de conversão + sentimento de notícias + ajuste
+    qualitativo manual (planilha) num único multiplicador para o
+    MotorPoisson (fator_qualitativo_casa/fora). 1.0 = neutro.
+
+    Os três componentes SOMAM desvios em torno de 1.0 (não se multiplicam
+    entre si) — assim o ajuste manual complementa o automático em vez de
+    substituí-lo ou de compor exponencialmente com ele. Faixa final: 0.75
+    a 1.25 (levemente mais ampla que antes, já que agora até três fontes
+    de sinal podem contribuir ao mesmo tempo).
     """
-    fator = 1.0
+    desvio = 0.0
 
     eficiencia = calcular_eficiencia_conversao(dados_time)
     if eficiencia is not None:
-        desvio = (eficiencia - EFICIENCIA_MEDIA_LIGA) / EFICIENCIA_MEDIA_LIGA
-        fator += max(-0.10, min(0.10, desvio * 0.5))
+        desvio_eficiencia = (eficiencia - EFICIENCIA_MEDIA_LIGA) / EFICIENCIA_MEDIA_LIGA
+        desvio += max(-0.10, min(0.10, desvio_eficiencia * 0.5))
 
-    fator += calcular_sentimento_time(nome_time, noticias)  # já limitado a ±0.15
+    desvio += calcular_sentimento_time(nome_time, noticias)  # já limitado a ±0.15
 
-    return round(max(0.80, min(1.20, fator)), 4)
+    if ajuste_manual is not None:
+        desvio += (ajuste_manual - 1.0)  # ajuste_manual já vem na escala 0.80–1.20
+
+    fator = 1.0 + desvio
+    return round(max(0.75, min(1.25, fator)), 4)

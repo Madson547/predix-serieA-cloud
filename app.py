@@ -2,7 +2,7 @@ import streamlit as st
 import pandas as pd
 from database import supabase
 from poisson import MotorPoisson
-from qualitativo import calcular_fator_qualitativo, buscar_noticias_recentes
+from qualitativo import calcular_fator_qualitativo, buscar_noticias_recentes, buscar_ajuste_manual
 
 st.set_page_config(layout="wide", page_title="Predix Sports")
 
@@ -56,15 +56,20 @@ def construir_top_apostas(resultado, casa, fora, top_n=3):
     ]
 
 
-def analisar_confronto(casa, fora):
+def analisar_confronto(casa, fora, data_jogo=None):
     tc = buscar_time(casa)
     tf = buscar_time(fora)
     if not tc or not tf:
         return None
 
     noticias = buscar_noticias_recentes(50)
-    fq_casa = calcular_fator_qualitativo(casa, tc, noticias)
-    fq_fora = calcular_fator_qualitativo(fora, tf, noticias)
+
+    ajuste = buscar_ajuste_manual(casa, fora, data_jogo)
+    ajuste_manual_casa = ajuste.get("ajuste_manual_casa") if ajuste else None
+    ajuste_manual_fora = ajuste.get("ajuste_manual_fora") if ajuste else None
+
+    fq_casa = calcular_fator_qualitativo(casa, tc, noticias, ajuste_manual_casa)
+    fq_fora = calcular_fator_qualitativo(fora, tf, noticias, ajuste_manual_fora)
 
     resultado = motor.calcular(
         time_casa=casa, time_fora=fora,
@@ -73,6 +78,9 @@ def analisar_confronto(casa, fora):
         fator_qualitativo_casa=fq_casa,
         fator_qualitativo_fora=fq_fora,
     )
+    # Anexado à resposta só pra UI conseguir avisar quando um ajuste manual
+    # (planilha) entrou no cálculo, sem precisar buscar de novo.
+    resultado.ajuste_manual_aplicado = ajuste is not None
     return resultado
 
 
@@ -182,12 +190,15 @@ with aba_painel:
         confronto_sel = st.selectbox("Escolha a Partida:", lista_confrontos)
         jogo = [j for j in partidas if f"{j['casa_nome']} x {j['fora_nome']}" == confronto_sel][0]
 
-        resultado = analisar_confronto(jogo['casa_nome'], jogo['fora_nome'])
+        resultado = analisar_confronto(jogo['casa_nome'], jogo['fora_nome'], jogo.get('data'))
 
         st.markdown(f"🗓️ **Data:** {jogo.get('data','')} | 🕒 **Hora:** {jogo.get('hora','')} | **Status:** {jogo.get('status_desc','')}")
         st.markdown("---")
 
         if resultado:
+            if getattr(resultado, "ajuste_manual_aplicado", False):
+                st.caption("📝 Ajuste qualitativo manual (planilha) aplicado neste confronto.")
+
             top_3 = construir_top_apostas(resultado, jogo['casa_nome'], jogo['fora_nome'])
             st.markdown("### 🔥 TOP 3 MELHORES APOSTAS")
             for item in top_3:
@@ -260,7 +271,7 @@ with aba_tabela:
         colunas_exist = [c for c in colunas if c in df.columns]
         df_ordenado = df[colunas_exist].sort_values("pts", ascending=False)
         styled = df_ordenado.style.apply(colorir_tabela, axis=1)
-        st.dataframe(styled, use_container_width=True, height=660, hide_index=True)
+        st.dataframe(styled, width='stretch', height=660, hide_index=True)
     else:
         st.info("Tabela não disponível.")
 
