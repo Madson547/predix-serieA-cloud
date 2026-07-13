@@ -1,5 +1,6 @@
 import streamlit as st
 import pandas as pd
+from datetime import date
 from database import supabase
 from poisson import MotorPoisson
 from qualitativo import calcular_fator_qualitativo, buscar_noticias_recentes, buscar_ajuste_manual
@@ -18,8 +19,10 @@ MEDALHAS = ["🥇", "🥈", "🥉"]
 
 @st.cache_data(ttl=300)
 def carregar_partidas():
+    hoje = date.today().isoformat()
     resp = (
         supabase.table("jogos").select("*")
+        .gte("data", hoje)
         .order("data").execute()
     )
     return resp.data
