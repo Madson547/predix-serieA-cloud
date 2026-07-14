@@ -59,6 +59,14 @@ def construir_top_apostas(resultado, casa, fora, top_n=3):
     ]
 
 
+def _valor_ou_padrao(dados_time, chave, padrao):
+    """dados_time.get(chave) pode existir mas vir None (time ainda sem
+    partidas com estatística coletada) — nesses casos cai pro padrão do
+    MotorPoisson em vez de quebrar ou virar 0."""
+    valor = dados_time.get(chave)
+    return valor if valor is not None else padrao
+
+
 def analisar_confronto(casa, fora, data_jogo=None):
     tc = buscar_time(casa)
     tf = buscar_time(fora)
@@ -80,9 +88,14 @@ def analisar_confronto(casa, fora, data_jogo=None):
         gm_fora=tf["gm"], gc_fora=tf["gc"], j_fora=tf["j"],
         fator_qualitativo_casa=fq_casa,
         fator_qualitativo_fora=fq_fora,
+        # Escanteios/cartões reais por time (coletor.py). Fallback pros
+        # defaults do MotorPoisson (5.2/4.8/2.2/2.3) se o time ainda não
+        # tiver estatística coletada (colunas NULL no Supabase).
+        cantos_casa=_valor_ou_padrao(tc, "esc_casa", 5.2),
+        cantos_fora=_valor_ou_padrao(tf, "esc_fora", 4.8),
+        cartoes_casa=_valor_ou_padrao(tc, "cart_casa", 2.2),
+        cartoes_fora=_valor_ou_padrao(tf, "cart_fora", 2.3),
     )
-    # Anexado à resposta só pra UI conseguir avisar quando um ajuste manual
-    # (planilha) entrou no cálculo, sem precisar buscar de novo.
     resultado.ajuste_manual_aplicado = ajuste is not None
     return resultado
 

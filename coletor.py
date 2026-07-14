@@ -128,7 +128,8 @@ def buscar_numero_rodada_atual() -> int | None:
     IMPORTANTE (bug confirmado em 2026-07 via diagnostico_rodada.py):
     a API às vezes deixa uma rodada ANTIGA com status 'andamento'
     desatualizado — ex: a "4ª Rodada" aparecia como 'andamento' mesmo
-    com as rodadas 5 a 18 já 'encerrada' depois dela. Se confiarmos
+    com as rodadas 5 a 18 já 'encerrada' depois dela (causa real: jogo
+    atrasado daquela rodada, tipo Bahia x Chapecoense). Se confiarmos
     cegamente em status=='andamento', ficamos travados numa rodada
     velha pra sempre.
 
@@ -251,9 +252,11 @@ def _media(lista: list, fallback: float = 0.0) -> float:
 
 def buscar_stats_por_time() -> dict:
     """
-    Percorre as partidas do campeonato e calcula a média de finalizações
-    e finalizações no gol por time (casa/fora). Faz uma chamada de API
-    por partida (com estatísticas) — pode demorar num campeonato cheio.
+    Percorre as partidas do campeonato e calcula, por time (casa/fora):
+      - médias de finalizações e finalizações no gol
+      - médias de escanteios e cartões amarelos
+    Faz uma chamada de API por partida (com estatísticas) — pode demorar
+    num campeonato cheio.
     """
     print("[STATS] Buscando partidas para calcular estatísticas...")
     data = _get(f"/campeonatos/{CAMPEONATO_ID}/partidas")
@@ -272,6 +275,8 @@ def buscar_stats_por_time() -> dict:
             stats.setdefault(nome, {
                 "finalizacoes_casa": [], "finalizacoes_fora": [],
                 "finalizacoes_gol_casa": [], "finalizacoes_gol_fora": [],
+                "escanteios_casa": [], "escanteios_fora": [],
+                "cartoes_casa": [], "cartoes_fora": [],
             })
 
         pid = p.get("id")
@@ -293,11 +298,19 @@ def buscar_stats_por_time() -> dict:
                        or est_m.get("shots_on_target") or 0)
         fing_v = float(est_v.get("finalizacoes_no_gol") or est_v.get("chutes_a_gol")
                        or est_v.get("shots_on_target") or 0)
+        esc_m  = float(est_m.get("escanteios") or est_m.get("corners") or 0)
+        esc_v  = float(est_v.get("escanteios") or est_v.get("corners") or 0)
+        cart_m = float(est_m.get("cartoes_amarelos") or est_m.get("yellow_cards") or 0)
+        cart_v = float(est_v.get("cartoes_amarelos") or est_v.get("yellow_cards") or 0)
 
         if fin_m  > 0: stats[nome_m]["finalizacoes_casa"].append(fin_m)
         if fin_v  > 0: stats[nome_v]["finalizacoes_fora"].append(fin_v)
         if fing_m > 0: stats[nome_m]["finalizacoes_gol_casa"].append(fing_m)
         if fing_v > 0: stats[nome_v]["finalizacoes_gol_fora"].append(fing_v)
+        if esc_m  > 0: stats[nome_m]["escanteios_casa"].append(esc_m)
+        if esc_v  > 0: stats[nome_v]["escanteios_fora"].append(esc_v)
+        if cart_m > 0: stats[nome_m]["cartoes_casa"].append(cart_m)
+        if cart_v > 0: stats[nome_v]["cartoes_fora"].append(cart_v)
 
     print(f"[STATS] Dados de {len(stats)} times processados")
     return stats
@@ -314,6 +327,16 @@ def atualizar_stats_times():
             "fin_fora":  _media(dados["finalizacoes_fora"], 9.5),
             "fing_casa": _media(dados["finalizacoes_gol_casa"], 4.0),
             "fing_fora": _media(dados["finalizacoes_gol_fora"], 3.3),
+            # Escanteios/cartões reais por time — antes disso o poisson.py
+            # usava sempre os mesmos valores padrão (5.2/4.8/2.2/2.3) pra
+            # QUALQUER confronto, porque o app.py nunca tinha um dado real
+            # pra passar. Os fallbacks abaixo batem com os defaults do
+            # MotorPoisson, então times sem jogos com estatística ainda
+            # continuam se comportando como antes.
+            "esc_casa":  _media(dados["escanteios_casa"], 5.2),
+            "esc_fora":  _media(dados["escanteios_fora"], 4.8),
+            "cart_casa": _media(dados["cartoes_casa"], 2.2),
+            "cart_fora": _media(dados["cartoes_fora"], 2.3),
             "data_atualizacao": datetime.now().isoformat(),
         }
         try:
@@ -321,7 +344,7 @@ def atualizar_stats_times():
             atualizados += 1
         except Exception as e:
             print(f"[ERRO] atualizar_stats_times {nome_time}: {e}")
-    print(f"[STATS] Finalizações salvas para {atualizados} times.")
+    print(f"[STATS] Finalizações/escanteios/cartões salvos para {atualizados} times.")
 
 
 # ==========================================================
