@@ -157,7 +157,15 @@ class MotorPoisson:
         over15_ht = round(over15_ft * 0.38, 1)
 
         # Linhas especiais
-        cantos_ft = round(cantos_casa + cantos_fora + (xg_casa * 1.1) + (xg_fora * 0.9), 1)
+        # CORREÇÃO (07/2026): removido o bônus baseado em xG que era somado
+        # em cima da média real de escanteios de cada time. A média real já
+        # reflete o perfil ofensivo do time, então somar o bônus de xG em
+        # cima inflava a estimativa (mesmo padrão do bug de dupla contagem
+        # já corrigido nos gols — identificado comparando com a Série B,
+        # que já tinha corrigido isso após validar contra jogo real: previa
+        # 11.6 escanteios vs <8.5 reais). cantos_ft agora é só a soma das
+        # médias reais por time.
+        cantos_ft = round(cantos_casa + cantos_fora, 1)
         cantos_ht = round(cantos_ft * 0.44, 1)
         equilibrio = (p_emp / 100) * 1.8
         cartoes_ft = round(
