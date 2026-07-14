@@ -68,13 +68,32 @@ class MotorPoisson:
     - Força de ataque e defesa normalizadas pela média da liga
     - Ajuste de fator casa (home advantage)
     - Ajuste qualitativo por desfalques e notícias (quando disponível)
+
+    CALIBRAÇÃO (07/2026) — portada da Série B por decisão explícita do
+    usuário: FATOR_CASA 1.15→1.25, FATOR_FORA 0.85→0.75,
+    fator_ajuste_empate 1.08→1.00 (padrão).
+
+    AJUSTE_GOLS_CASA/FORA — a Série B calibrou +0.5/+0.5 comparando 1
+    jogo de referência (Ponte Preta x Criciúma) com as odds da Betano.
+    Testado na Série A com Botafogo x Santos (rodada 19): com +0.5, o
+    modelo previu 85.3% de over 2.5 gols contra ~51.3% implícito na
+    Betano (diferença de 34 pontos — sinal de xG inflado demais pra
+    Série A). Reduzido pela metade (+0.25/+0.25) como meio-termo,
+    decisão explícita do usuário em 2026-07. Reavaliar com mais jogos
+    reais antes de confiar cegamente nesse valor.
     """
 
     MAX_GOLS = 9
-    FATOR_CASA = 1.15   # Vantagem histórica do mandante no futebol brasileiro
-    FATOR_FORA = 0.85
+    FATOR_CASA = 1.25   # Vantagem histórica do mandante — calibração portada da Série B (era 1.15)
+    FATOR_FORA = 0.75   # idem (era 0.85)
 
-    def __init__(self, fator_ajuste_empate: float = 1.08):
+    # Ajuste aditivo de gols esperados (xG) — reduzido pela metade em
+    # relação ao valor original da Série B após comparação com odds reais
+    # da Betano no jogo Botafogo x Santos (ver docstring da classe).
+    AJUSTE_GOLS_CASA = 0.25
+    AJUSTE_GOLS_FORA = 0.25
+
+    def __init__(self, fator_ajuste_empate: float = 1.00):
         self.fator_ajuste_empate = fator_ajuste_empate
 
     def calcular(
@@ -117,6 +136,11 @@ class MotorPoisson:
         # Expected Goals ajustados — fator casa aplicado uma única vez aqui
         xg_casa = atk_casa * def_fora * media_casa * fator_qualitativo_casa
         xg_fora = atk_fora * def_casa * media_fora * fator_qualitativo_fora
+
+        # Correção de calibração portada da Série B, valor reduzido pela
+        # metade após validação com odds reais (ver docstring da classe)
+        xg_casa += self.AJUSTE_GOLS_CASA
+        xg_fora += self.AJUSTE_GOLS_FORA
 
         xg_casa = max(xg_casa, 0.1)
         xg_fora = max(xg_fora, 0.1)
