@@ -75,23 +75,26 @@ class MotorPoisson:
 
     AJUSTE_GOLS_CASA/FORA — a Série B calibrou +0.5/+0.5 comparando 1
     jogo de referência (Ponte Preta x Criciúma) com as odds da Betano.
-    Testado na Série A com Botafogo x Santos (rodada 19): com +0.5, o
-    modelo previu 85.3% de over 2.5 gols contra ~51.3% implícito na
-    Betano (diferença de 34 pontos — sinal de xG inflado demais pra
-    Série A). Reduzido pela metade (+0.25/+0.25) como meio-termo,
-    decisão explícita do usuário em 2026-07. Reavaliar com mais jogos
-    reais antes de confiar cegamente nesse valor.
+    Testado na Série A: 1) contra Botafogo x Santos (rodada 19) sozinho
+    (+0.5 gerou 85.3% de over 2.5 vs ~51.3% implícito na Betano); depois
+    2) via diagnostico_calibracao.py contra os 22 jogos já encerrados da
+    temporada (log-loss/Brier). Em NENHUM dos dois testes o ajuste
+    mostrou melhora — no backtest de 22 jogos, a config sem ajuste teve
+    log-loss de 1x2 melhor (0.958) que com +0.25 (0.977). Desativado
+    (0.0) por decisão explícita do usuário em 2026-07. Mantido como
+    constante (em vez de removido do código) pra ser fácil reativar e
+    testar de novo quando houver mais jogos na amostra.
     """
 
     MAX_GOLS = 9
     FATOR_CASA = 1.25   # Vantagem histórica do mandante — calibração portada da Série B (era 1.15)
     FATOR_FORA = 0.75   # idem (era 0.85)
 
-    # Ajuste aditivo de gols esperados (xG) — reduzido pela metade em
-    # relação ao valor original da Série B após comparação com odds reais
-    # da Betano no jogo Botafogo x Santos (ver docstring da classe).
-    AJUSTE_GOLS_CASA = 0.25
-    AJUSTE_GOLS_FORA = 0.25
+    # Ajuste aditivo de gols esperados (xG) — DESATIVADO (0.0). Testado em
+    # 0.5 e 0.25 e nunca mostrou melhora real (ver docstring da classe).
+    # Deixe > 0.0 só se for testar de novo com diagnostico_calibracao.py.
+    AJUSTE_GOLS_CASA = 0.0
+    AJUSTE_GOLS_FORA = 0.0
 
     def __init__(self, fator_ajuste_empate: float = 1.00):
         self.fator_ajuste_empate = fator_ajuste_empate
