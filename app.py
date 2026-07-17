@@ -3,6 +3,7 @@ import pandas as pd
 from datetime import date
 from database import supabase
 from poisson import MotorPoisson
+from previsoes import salvar_previsao, buscar_previsoes
 from qualitativo import calcular_fator_qualitativo, buscar_noticias_recentes, buscar_ajuste_manual
 
 st.set_page_config(layout="wide", page_title="Predix Sports")
@@ -221,6 +222,11 @@ with aba_painel:
                 medalha = MEDALHAS[item["posicao"] - 1]
                 odd_txt = f" | Odd Justa: {item['odd_justa']}" if item.get("odd_justa") else ""
                 st.success(f"{medalha} **{item['mercado']}** — Confiança: {item['confianca']}%{odd_txt}")
+            if st.button("💾 Salvar previsão", key=f"salvar_{jogo['casa_nome']}_{jogo['fora_nome']}_{jogo.get('data','')}"):
+                if salvar_previsao(resultado, jogo['casa_nome'], jogo['fora_nome'], jogo.get('data'), top_3):
+                    st.success("Previsão salva! Confira depois na aba 📈 Medidor de Desempenho.")
+                else:
+                    st.error("Não consegui salvar — confira o log do Streamlit Cloud.")
 
             st.markdown("---")
             st.markdown("### 🎯 Todas as Probabilidades")
@@ -292,5 +298,28 @@ with aba_tabela:
         st.info("Tabela não disponível.")
 
 with aba_performance:
-    st.subheader("📈 Histórico da Banca")
-    st.info("Em breve: histórico completo de apostas com gráfico de evolução.")
+    st.subheader("📈 Medidor de Desempenho")
+    st.caption("Busque previsões salvas pra comparar com o resultado real depois do jogo.")
+
+    termo_busca = st.text_input("Buscar por time (ou deixe vazio pra ver as mais recentes):", "")
+    previsoes_salvas = buscar_previsoes(termo_busca)
+
+    if not previsoes_salvas:
+        st.info("Nenhuma previsão salva ainda. Use o botão '💾 Salvar previsão' na aba Painel Analítico.")
+    else:
+        for p in previsoes_salvas:
+            with st.expander(f"{p['time_casa']} x {p['time_fora']} — {p.get('data','')}"):
+                st.write(f"Vitória {p['time_casa']}: {p['prob_casa']}% | Empate: {p['prob_empate']}% | Vitória {p['time_fora']}: {p['prob_fora']}%")
+                st.write(f"Ambas Marcam: {p['prob_btts']}% | Gols >1.5: {p['over15_ft']}% | Gols >2.5: {p['over25_ft']}%")
+                st.write(f"Escanteios: média {p['cantos_ft']} | linha {p['linha_cantos']} | over: {p['prob_over_cantos']}%")
+                st.write(f"Cartões: média {p['cartoes_ft']} | linha {p['linha_cartoes']} | over: {p['prob_over_cartoes']}%")
+                st.write(f"Placar mais provável: {p['placar_mais_provavel']}")
+
+                jogo_real = supabase.table("jogos").select("gols_casa,gols_fora,status") \
+                    .eq("casa_nome", p['time_casa']).eq("fora_nome", p['time_fora']) \
+                    .eq("data", p['data']).execute().data
+                if jogo_real and jogo_real[0].get("status") == "encerrado":
+                    gc, gf = jogo_real[0]["gols_casa"], jogo_real[0]["gols_fora"]
+                    st.success(f"✅ Resultado real: {p['time_casa']} {gc} x {gf} {p['time_fora']}")
+                else:
+                    st.caption("⏳ Jogo ainda não encerrado (ou sem placar salvo).")
