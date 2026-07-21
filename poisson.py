@@ -48,6 +48,22 @@ class ResultadoPoisson:
     linha_cartoes: float
     prob_over_cartoes: float
 
+    # Chutes / Chutes no gol — POR TIME (não combinado), pra diversificar
+    # Múltiplas sem repetir a mesma perna em categorias diferentes
+    chutes_casa: float
+    chutes_fora: float
+    linha_chutes_casa: float
+    prob_over_chutes_casa: float
+    linha_chutes_fora: float
+    prob_over_chutes_fora: float
+
+    chutes_gol_casa: float
+    chutes_gol_fora: float
+    linha_chutes_gol_casa: float
+    prob_over_chutes_gol_casa: float
+    linha_chutes_gol_fora: float
+    prob_over_chutes_gol_fora: float
+
     # Placar mais provável
     placar_mais_provavel: str
     prob_placar_mais_provavel: float
@@ -115,6 +131,10 @@ class MotorPoisson:
         cantos_fora: float = 4.8,
         cartoes_casa: float = 2.2,
         cartoes_fora: float = 2.3,
+        chutes_casa: float = 11.0,
+        chutes_fora: float = 9.5,
+        chutes_gol_casa: float = 4.0,
+        chutes_gol_fora: float = 3.3,
     ) -> ResultadoPoisson:
         """
         Calcula probabilidades completas para um confronto.
@@ -207,6 +227,19 @@ class MotorPoisson:
         linha_cartoes = self._linha_media(cartoes_ft)
         prob_over_cartoes = self._prob_over_poisson(cartoes_ft, linha_cartoes) * 100
 
+        # Chutes / Chutes no gol — por time, não combinado. Usa a média
+        # real coletada (fin_casa/fin_fora/fing_casa/fing_fora) e a mesma
+        # aproximação Poisson já usada em escanteios/cartões.
+        linha_chutes_casa = self._linha_media(chutes_casa)
+        prob_over_chutes_casa = self._prob_over_poisson(chutes_casa, linha_chutes_casa) * 100
+        linha_chutes_fora = self._linha_media(chutes_fora)
+        prob_over_chutes_fora = self._prob_over_poisson(chutes_fora, linha_chutes_fora) * 100
+
+        linha_chutes_gol_casa = self._linha_media(chutes_gol_casa)
+        prob_over_chutes_gol_casa = self._prob_over_poisson(chutes_gol_casa, linha_chutes_gol_casa) * 100
+        linha_chutes_gol_fora = self._linha_media(chutes_gol_fora)
+        prob_over_chutes_gol_fora = self._prob_over_poisson(chutes_gol_fora, linha_chutes_gol_fora) * 100
+
         # Placar mais provável
         placar, prob_placar = self._placar_mais_provavel(matriz)
 
@@ -241,6 +274,18 @@ class MotorPoisson:
             prob_over_cantos=round(prob_over_cantos, 1),
             linha_cartoes=linha_cartoes,
             prob_over_cartoes=round(prob_over_cartoes, 1),
+            chutes_casa=round(chutes_casa, 1),
+            chutes_fora=round(chutes_fora, 1),
+            linha_chutes_casa=linha_chutes_casa,
+            prob_over_chutes_casa=round(prob_over_chutes_casa, 1),
+            linha_chutes_fora=linha_chutes_fora,
+            prob_over_chutes_fora=round(prob_over_chutes_fora, 1),
+            chutes_gol_casa=round(chutes_gol_casa, 1),
+            chutes_gol_fora=round(chutes_gol_fora, 1),
+            linha_chutes_gol_casa=linha_chutes_gol_casa,
+            prob_over_chutes_gol_casa=round(prob_over_chutes_gol_casa, 1),
+            linha_chutes_gol_fora=linha_chutes_gol_fora,
+            prob_over_chutes_gol_fora=round(prob_over_chutes_gol_fora, 1),
             placar_mais_provavel=placar,
             prob_placar_mais_provavel=round(prob_placar * 100, 1),
             odd_casa=_odd_justa(p_casa),
