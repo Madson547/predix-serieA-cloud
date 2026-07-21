@@ -99,6 +99,12 @@ def analisar_confronto(casa, fora, data_jogo=None):
         cantos_fora=_valor_ou_padrao(tf, "esc_fora", 4.8),
         cartoes_casa=_valor_ou_padrao(tc, "cart_casa", 2.2),
         cartoes_fora=_valor_ou_padrao(tf, "cart_fora", 2.3),
+        # Chutes/chutes no gol reais por time (coletor.py já coletava,
+        # só não era exposto como mercado até agora).
+        chutes_casa=_valor_ou_padrao(tc, "fin_casa", 11.0),
+        chutes_fora=_valor_ou_padrao(tf, "fin_fora", 9.5),
+        chutes_gol_casa=_valor_ou_padrao(tc, "fing_casa", 4.0),
+        chutes_gol_fora=_valor_ou_padrao(tf, "fing_fora", 3.3),
     )
     # Anexado à resposta só pra UI conseguir avisar quando um ajuste manual
     # (planilha) entrou no cálculo, sem precisar buscar de novo.
@@ -145,6 +151,29 @@ def montar_mercados(resultado, casa, fora):
     else:
         mercados["cartoes"] = {"nome": f"Menos de {resultado.linha_cartoes} Cartões", "prob": 100 - resultado.prob_over_cartoes}
 
+    # Chutes/chutes no gol são POR TIME, então cada um vira sua própria
+    # categoria — dá pra combinar "chutes do mandante" com "chutes no gol
+    # do visitante" na mesma múltipla sem repetir a mesma perna duas vezes.
+    if resultado.prob_over_chutes_casa >= 50:
+        mercados["chutes_casa"] = {"nome": f"Mais de {resultado.linha_chutes_casa} Chutes ({casa})", "prob": resultado.prob_over_chutes_casa}
+    else:
+        mercados["chutes_casa"] = {"nome": f"Menos de {resultado.linha_chutes_casa} Chutes ({casa})", "prob": 100 - resultado.prob_over_chutes_casa}
+
+    if resultado.prob_over_chutes_fora >= 50:
+        mercados["chutes_fora"] = {"nome": f"Mais de {resultado.linha_chutes_fora} Chutes ({fora})", "prob": resultado.prob_over_chutes_fora}
+    else:
+        mercados["chutes_fora"] = {"nome": f"Menos de {resultado.linha_chutes_fora} Chutes ({fora})", "prob": 100 - resultado.prob_over_chutes_fora}
+
+    if resultado.prob_over_chutes_gol_casa >= 50:
+        mercados["chutes_gol_casa"] = {"nome": f"Mais de {resultado.linha_chutes_gol_casa} Chutes no Gol ({casa})", "prob": resultado.prob_over_chutes_gol_casa}
+    else:
+        mercados["chutes_gol_casa"] = {"nome": f"Menos de {resultado.linha_chutes_gol_casa} Chutes no Gol ({casa})", "prob": 100 - resultado.prob_over_chutes_gol_casa}
+
+    if resultado.prob_over_chutes_gol_fora >= 50:
+        mercados["chutes_gol_fora"] = {"nome": f"Mais de {resultado.linha_chutes_gol_fora} Chutes no Gol ({fora})", "prob": resultado.prob_over_chutes_gol_fora}
+    else:
+        mercados["chutes_gol_fora"] = {"nome": f"Menos de {resultado.linha_chutes_gol_fora} Chutes no Gol ({fora})", "prob": 100 - resultado.prob_over_chutes_gol_fora}
+
     return mercados
 
 
@@ -156,6 +185,7 @@ def gerar_multiplas(resultado, casa, fora):
         ("Múltipla 2 — Equilibrada", ["resultado", "gols", "btts"]),
         ("Múltipla 3 — Mercados Alternativos", ["gols", "escanteios", "cartoes"]),
         ("Múltipla 4 — Mais Arriscada", ["resultado", "gols", "btts", "escanteios"]),
+        ("Múltipla 5 — Chutes", ["chutes_casa", "chutes_fora", "chutes_gol_casa", "chutes_gol_fora"]),
     ]
 
     multiplas = []
@@ -244,6 +274,10 @@ with aba_painel:
             st.success(f"🟩 Gols FT (>2.5): {resultado.over25_ft}%")
             st.warning(f"🟫 Escanteios FT: média {resultado.cantos_ft} | Mais de {resultado.linha_cantos}: {resultado.prob_over_cantos}%")
             st.error(f"🟥 Cartões FT: média {resultado.cartoes_ft} | Mais de {resultado.linha_cartoes}: {resultado.prob_over_cartoes}%")
+            st.info(f"🎯 Chutes {jogo['casa_nome']}: média {resultado.chutes_casa} | Mais de {resultado.linha_chutes_casa}: {resultado.prob_over_chutes_casa}%")
+            st.info(f"🎯 Chutes {jogo['fora_nome']}: média {resultado.chutes_fora} | Mais de {resultado.linha_chutes_fora}: {resultado.prob_over_chutes_fora}%")
+            st.success(f"🥅 Chutes no gol {jogo['casa_nome']}: média {resultado.chutes_gol_casa} | Mais de {resultado.linha_chutes_gol_casa}: {resultado.prob_over_chutes_gol_casa}%")
+            st.success(f"🥅 Chutes no gol {jogo['fora_nome']}: média {resultado.chutes_gol_fora} | Mais de {resultado.linha_chutes_gol_fora}: {resultado.prob_over_chutes_gol_fora}%")
             st.info(f"🏆 Placar mais provável: **{resultado.placar_mais_provavel}**")
         else:
             st.warning("Análise não disponível — time não encontrado no banco.")
