@@ -317,34 +317,59 @@ def buscar_stats_por_time() -> dict:
 
 
 def atualizar_stats_times():
+    """
+    Atualiza fin_/fing_/esc_/cart_ por time — MAS só escreve uma coluna se
+    essa execução realmente achou dado real pra ela. Antes, quando a API
+    não devolvia nada (lista vazia), o código escrevia o valor padrão
+    (5.2/4.8/2.2/2.3) mesmo assim — isso apagava qualquer dado bom que já
+    estivesse lá (seja de uma coleta anterior bem-sucedida, seja um valor
+    que você tenha colocado manualmente no Supabase). Agora, sem dado novo,
+    a coluna simplesmente não é tocada — o time mantém o que já tinha.
+    """
     stats = buscar_stats_por_time()
     if not stats:
         return
+
     atualizados = 0
+    sem_esc_cart = []  # times que ficaram sem dado real de escanteios/cartões nesta execução
+
     for nome_time, dados in stats.items():
-        update = {
-            "fin_casa":  _media(dados["finalizacoes_casa"], 11.0),
-            "fin_fora":  _media(dados["finalizacoes_fora"], 9.5),
-            "fing_casa": _media(dados["finalizacoes_gol_casa"], 4.0),
-            "fing_fora": _media(dados["finalizacoes_gol_fora"], 3.3),
-            # Escanteios/cartões reais por time — antes disso o poisson.py
-            # usava sempre os mesmos valores padrão (5.2/4.8/2.2/2.3) pra
-            # QUALQUER confronto, porque o app.py nunca tinha um dado real
-            # pra passar. Os fallbacks abaixo batem com os defaults do
-            # MotorPoisson, então times sem jogos com estatística ainda
-            # continuam se comportando como antes.
-            "esc_casa":  _media(dados["escanteios_casa"], 5.2),
-            "esc_fora":  _media(dados["escanteios_fora"], 4.8),
-            "cart_casa": _media(dados["cartoes_casa"], 2.2),
-            "cart_fora": _media(dados["cartoes_fora"], 2.3),
-            "data_atualizacao": datetime.now().isoformat(),
-        }
+        update = {"data_atualizacao": datetime.now().isoformat()}
+
+        if dados["finalizacoes_casa"]:
+            update["fin_casa"] = _media(dados["finalizacoes_casa"])
+        if dados["finalizacoes_fora"]:
+            update["fin_fora"] = _media(dados["finalizacoes_fora"])
+        if dados["finalizacoes_gol_casa"]:
+            update["fing_casa"] = _media(dados["finalizacoes_gol_casa"])
+        if dados["finalizacoes_gol_fora"]:
+            update["fing_fora"] = _media(dados["finalizacoes_gol_fora"])
+
+        tem_esc = bool(dados["escanteios_casa"] or dados["escanteios_fora"])
+        tem_cart = bool(dados["cartoes_casa"] or dados["cartoes_fora"])
+        if dados["escanteios_casa"]:
+            update["esc_casa"] = _media(dados["escanteios_casa"])
+        if dados["escanteios_fora"]:
+            update["esc_fora"] = _media(dados["escanteios_fora"])
+        if dados["cartoes_casa"]:
+            update["cart_casa"] = _media(dados["cartoes_casa"])
+        if dados["cartoes_fora"]:
+            update["cart_fora"] = _media(dados["cartoes_fora"])
+
+        if not (tem_esc and tem_cart):
+            sem_esc_cart.append(nome_time)
+
         try:
             supabase.table("times").update(update).eq("nome", nome_time).execute()
             atualizados += 1
         except Exception as e:
             print(f"[ERRO] atualizar_stats_times {nome_time}: {e}")
-    print(f"[STATS] Finalizações/escanteios/cartões salvos para {atualizados} times.")
+
+    print(f"[STATS] Finalizações/escanteios/cartões atualizados para {atualizados} times.")
+
+    if sem_esc_cart:
+        print(f"[AVISO] {len(sem_esc_cart)} time(s) SEM dado real de escanteios/cartões "
+              f"(usando o que já existia — padrão ou manual): {', '.join(sem_esc_cart)}")
 
 
 # ==========================================================
