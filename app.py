@@ -84,13 +84,11 @@ def analisar_confronto(casa, fora, data_jogo=None):
 
     resultado = motor.calcular(
         time_casa=casa, time_fora=fora,
-        # Gols reais separados por mando de campo (upgrade 07/2026).
-        # Fallback pra média geral da temporada (gm/j) se o time ainda
-        # não tiver os campos novos (gm_casa/gc_casa/gm_fora/gc_fora).
-        gm_casa=_valor_ou_padrao(tc, "gm_casa", tc["gm"] / tc["j"] if tc.get("j") else 1.3),
-        gc_casa=_valor_ou_padrao(tc, "gc_casa", tc["gc"] / tc["j"] if tc.get("j") else 1.0),
-        gm_fora=_valor_ou_padrao(tf, "gm_fora", tf["gm"] / tf["j"] if tf.get("j") else 1.0),
-        gc_fora=_valor_ou_padrao(tf, "gc_fora", tf["gc"] / tf["j"] if tf.get("j") else 1.3),
+        # Gols temporada inteira (gm/gc/j) — revertido em 2026-07 após
+        # o diagnostico_calibracao_v2.py mostrar que a versão com splits
+        # casa/fora teve log-loss/Brier PIORES em 26 jogos reais.
+        gm_casa=tc["gm"], gc_casa=tc["gc"], j_casa=tc["j"],
+        gm_fora=tf["gm"], gc_fora=tf["gc"], j_fora=tf["j"],
         fator_qualitativo_casa=fq_casa,
         fator_qualitativo_fora=fq_fora,
         # Escanteios/cartões reais por time (coletor.py). Fallback pros

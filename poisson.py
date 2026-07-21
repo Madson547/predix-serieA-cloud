@@ -64,40 +64,40 @@ class MotorPoisson:
     """
     Motor quantitativo baseado em Distribuição de Poisson.
 
-    Metodologia Dixon & Coles adaptado:
-    - Força de ataque e defesa normalizadas pela média da liga,
-      SEPARADAS por mando de campo (casa/fora)
-    - Vantagem de jogar em casa embutida nas próprias médias da liga
-      (não é mais uma constante artificial igual pra todo time)
+    Metodologia Diego Godin (Dixon & Coles adaptado):
+    - Força de ataque e defesa normalizadas pela média da liga
+    - Ajuste de fator casa (home advantage)
     - Ajuste qualitativo por desfalques e notícias (quando disponível)
 
-    UPGRADE (07/2026) — substituído o FATOR_CASA/FATOR_FORA fixo (que
-    aplicava a mesma "vantagem de mandante" pra qualquer time) por dados
-    reais de gols marcados/sofridos separados por casa e fora, coletados
-    manualmente pelo usuário pra todos os 20 times da Série A. Antes, um
-    time que joga muito melhor em casa e outro que joga igual em qualquer
-    lugar recebiam o mesmo empurrão artificial de mando de campo — agora
-    cada time carrega sua própria vantagem de casa real.
+    REVERTIDO (07/2026) — a versão com gols separados por casa/fora e
+    médias de liga por time (testada por algumas horas) foi comparada
+    com esta fórmula via diagnostico_calibracao_v2.py contra 26 jogos
+    já encerrados da temporada. Resultado: a fórmula com FATOR_CASA/
+    FATOR_FORA fixo teve log-loss e Brier MELHORES em 1x2 (0.923/0.546
+    vs 0.954/0.572) e em over/under 2.5 (0.653/0.232 vs 0.727/0.263).
+    A versão nova só ganhou em acurácia bruta do over/under, que é uma
+    métrica mais fraca (não pune erro confiante como log-loss/brier).
+    Hipótese: separar por casa/fora reduz o tamanho da amostra por time
+    pela metade, aumentando ruído mais do que ganha em precisão teórica.
+    Decisão do usuário: reverter. FATOR_CASA/FATOR_FORA/empate mantidos
+    como estavam (calibração portada da Série B, 07/2026).
 
-    As médias da liga (MEDIA_GM_CASA/GC_CASA/GM_FORA/GC_FORA) também
-    deixaram de ser um valor fixo (1.30) e passaram a ser calculadas a
-    partir da média dos 20 times reais — a vantagem de casa implícita
-    nesses dados é de ~1.56x (marcar em casa vs fora), um pouco menor
-    que os 1.67x que o FATOR_CASA/FATOR_FORA antigo presumia.
-
-    AJUSTE_GOLS_CASA/FORA foi removido (estava em 0.0 desde a calibração
-    anterior, nunca mostrou benefício em nenhum teste).
+    ÚNICA MELHORIA MANTIDA da investigação: media_gols_liga passou de
+    um valor chutado (1.30) pra um valor calculado a partir da média
+    real dos 20 times da Série A coletados manualmente (1.3135) — troca
+    de baixíssimo risco, sem reintroduzir a complexidade que não se
+    mostrou melhor no backtest.
     """
 
     MAX_GOLS = 9
+    FATOR_CASA = 1.25   # Vantagem histórica do mandante — calibração portada da Série B
+    FATOR_FORA = 0.75
 
-    # Médias da liga calculadas a partir dos 20 times da Série A 2026
-    # (dados coletados manualmente pelo usuário em 2026-07). Reavaliar
-    # conforme a temporada avança e os números mudarem.
-    MEDIA_GM_CASA = 1.599   # gols marcados em casa, média da liga
-    MEDIA_GC_CASA = 1.001   # gols sofridos em casa, média da liga
-    MEDIA_GM_FORA = 1.028   # gols marcados fora, média da liga
-    MEDIA_GC_FORA = 1.527   # gols sofridos fora, média da liga
+    # Ajuste aditivo de gols esperados (xG) — DESATIVADO (0.0). Testado em
+    # 0.5 e 0.25 e nunca mostrou melhora real. Deixe > 0.0 só se for
+    # testar de novo com diagnostico_calibracao.py.
+    AJUSTE_GOLS_CASA = 0.0
+    AJUSTE_GOLS_FORA = 0.0
 
     def __init__(self, fator_ajuste_empate: float = 1.00):
         self.fator_ajuste_empate = fator_ajuste_empate
@@ -106,8 +106,9 @@ class MotorPoisson:
         self,
         time_casa: str,
         time_fora: str,
-        gm_casa: float, gc_casa: float,
-        gm_fora: float, gc_fora: float,
+        gm_casa: float, gc_casa: float, j_casa: int,
+        gm_fora: float, gc_fora: float, j_fora: int,
+        media_gols_liga: float = 1.3135,
         fator_qualitativo_casa: float = 1.0,
         fator_qualitativo_fora: float = 1.0,
         cantos_casa: float = 5.2,
@@ -120,25 +121,27 @@ class MotorPoisson:
 
         Args:
             time_casa / time_fora: Nomes dos times
-            gm_casa: média de gols marcados do mandante JOGANDO EM CASA
-            gc_casa: média de gols sofridos do mandante JOGANDO EM CASA
-            gm_fora: média de gols marcados do visitante JOGANDO FORA
-            gc_fora: média de gols sofridos do visitante JOGANDO FORA
+            gm_*, gc_*, j_*: Gols marcados, sofridos e jogos (temporada
+                inteira, sem separar mando de campo)
+            media_gols_liga: Média real de gols/jogo da liga (calculada
+                a partir dos 20 times coletados em 2026-07)
             fator_qualitativo_*: Multiplicador por desfalques/notícias (0.80–1.20)
             cantos_*, cartoes_*: Médias de escanteios e cartões por jogo
         """
-        # Força de ataque/defesa, cada uma comparada com a média da liga
-        # NA MESMA DIREÇÃO (mandante sempre contra baseline de mandante,
-        # visitante sempre contra baseline de visitante) — é isso que
-        # embute a vantagem de casa real de cada time, sem precisar de
-        # nenhuma constante artificial multiplicando por fora.
-        atk_casa = gm_casa / self.MEDIA_GM_CASA
-        def_casa = gc_casa / self.MEDIA_GC_CASA
-        atk_fora = gm_fora / self.MEDIA_GM_FORA
-        def_fora = gc_fora / self.MEDIA_GC_FORA
+        media_casa = media_gols_liga * self.FATOR_CASA
+        media_fora = media_gols_liga * self.FATOR_FORA
 
-        xg_casa = atk_casa * def_fora * self.MEDIA_GM_CASA * fator_qualitativo_casa
-        xg_fora = atk_fora * def_casa * self.MEDIA_GM_FORA * fator_qualitativo_fora
+        # Forças normalizadas pela média da LIGA (sem fator casa embutido).
+        atk_casa = (gm_casa / j_casa) / media_gols_liga
+        def_casa = (gc_casa / j_casa) / media_gols_liga
+        atk_fora = (gm_fora / j_fora) / media_gols_liga
+        def_fora = (gc_fora / j_fora) / media_gols_liga
+
+        xg_casa = atk_casa * def_fora * media_casa * fator_qualitativo_casa
+        xg_fora = atk_fora * def_casa * media_fora * fator_qualitativo_fora
+
+        xg_casa += self.AJUSTE_GOLS_CASA
+        xg_fora += self.AJUSTE_GOLS_FORA
 
         xg_casa = max(xg_casa, 0.1)
         xg_fora = max(xg_fora, 0.1)
