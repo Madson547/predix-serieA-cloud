@@ -8,51 +8,6 @@ from previsoes import salvar_previsao, buscar_previsoes
 
 import streamlit as st
 
-import streamlit as st
-
-# 1. Definição do usuário e senha
-USUARIO_CORRETO = "admin"
-SENHA_CORRETA = "seriea2026"
-
-# 2. Inicializa o estado de login
-if "logado" not in st.session_state:
-    st.session_state.logado = False
-
-# 3. Função da tela de login
-def tela_login():
-    st.title("⚽ Previsor Esportivo - Série A")
-    st.subheader("Área Restrita")
-    
-    usuario = st.text_input("Usuário")
-    senha = st.text_input("Senha", type="password")
-    
-    if st.button("Entrar"):
-        if usuario == USUARIO_CORRETO and senha == SENHA_CORRETA:
-            st.session_state.logado = True
-            st.rerun()
-        else:
-            st.error("Usuário ou senha incorretos.")
-
-# 4. Controle de Fluxo Bloqueante
-if not st.session_state.logado:
-    tela_login()
-else:
-    # Botão para deslogar na barra lateral
-    if st.sidebar.button("Sair do App"):
-        st.session_state.logado = False
-        st.rerun()
-        
-    # ---------------------------------------------------------
-    # TUDO ABAIXO DAQUI SÓ APARECE DEPOIS DE LOGAR
-    # ---------------------------------------------------------
-    st.title("⚽ Predix Sports — Análise Quantitativa Série A 2026")
-    
-    # [ATENÇÃO: Cole aqui todo o resto do seu código atual]
-    # Certifique-se de aplicar o recuo (Tab ou 4 espaços) 
-    # em todas as linhas do seu código original que colar aqui.
-
-
-
 st.set_page_config(layout="wide", page_title="Predix Sports")
 
 st.markdown("""
