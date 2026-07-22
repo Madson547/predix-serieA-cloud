@@ -8,8 +8,10 @@ import json
 from database import supabase
 
 
-def salvar_previsao(resultado, casa: str, fora: str, data_jogo: str, top3: list) -> bool:
-    """Salva (ou atualiza) a previsão essencial de um confronto.
+def salvar_previsao(resultado, casa: str, fora: str, data_jogo: str, top3: list, multiplas: list = None) -> bool:
+    """Salva (ou atualiza) a previsão essencial de um confronto, incluindo
+    as 5 múltiplas geradas — pra analisar rodada a rodada qual combinação
+    de mercados performa melhor de verdade, não só mercado por mercado.
     Chamado manualmente pelo botão 'Salvar previsão' no app.py."""
     registro = {
         "data": data_jogo,
@@ -29,6 +31,7 @@ def salvar_previsao(resultado, casa: str, fora: str, data_jogo: str, top3: list)
         "prob_over_cartoes": resultado.prob_over_cartoes,
         "placar_mais_provavel": resultado.placar_mais_provavel,
         "top3_json": json.dumps(top3, ensure_ascii=False),
+        "multiplas_json": json.dumps(multiplas, ensure_ascii=False) if multiplas else None,
     }
     try:
         existe = supabase.table("previsoes").select("id") \
