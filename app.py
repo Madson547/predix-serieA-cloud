@@ -7,13 +7,37 @@ from poisson import MotorPoisson
 from qualitativo import calcular_fator_qualitativo, buscar_noticias_recentes, buscar_ajuste_manual
 from previsoes import salvar_previsao, buscar_previsoes
 
-st.set_page_config(layout="wide", page_title="Predix Sports")
+st.set_page_config(layout="wide", page_title="Predix Sports Série A", page_icon="🇧🇷")
 
 st.markdown("""
     <style>
     .stApp { background-color: #0e1117; color: white; }
     </style>
 """, unsafe_allow_html=True)
+
+
+def _verificar_senha() -> bool:
+    """Bloqueia o app até a senha certa ser digitada. A senha fica em
+    st.secrets['APP_PASSWORD'] (Streamlit Cloud -> app -> Settings ->
+    Secrets), NUNCA escrita no código. Usa session_state pra só pedir
+    uma vez por sessão do navegador, não a cada clique."""
+    if st.session_state.get("autenticado", False):
+        return True
+
+    def _checar():
+        senha_certa = st.secrets.get("APP_PASSWORD", "")
+        digitada = st.session_state.get("senha_input", "")
+        st.session_state["autenticado"] = bool(senha_certa) and digitada == senha_certa
+
+    st.markdown("## 🔒 Predix Sports — Acesso restrito")
+    st.text_input("Senha:", type="password", key="senha_input", on_change=_checar)
+    if st.session_state.get("autenticado") is False and "senha_input" in st.session_state:
+        st.error("Senha incorreta.")
+    return False
+
+
+if not _verificar_senha():
+    st.stop()
 
 motor = MotorPoisson()
 MEDALHAS = ["🥇", "🥈", "🥉"]
