@@ -141,6 +141,16 @@ def montar_mercados(resultado, casa, fora):
     else:
         mercados["btts"] = {"nome": "Ambas Marcam (Não)", "prob": 100 - resultado.prob_btts}
 
+    if resultado.prob_casa_marca >= 50:
+        mercados["casa_marca"] = {"nome": f"{casa} Marca", "prob": resultado.prob_casa_marca}
+    else:
+        mercados["casa_marca"] = {"nome": f"{casa} Não Marca", "prob": 100 - resultado.prob_casa_marca}
+
+    if resultado.prob_fora_marca >= 50:
+        mercados["fora_marca"] = {"nome": f"{fora} Marca", "prob": resultado.prob_fora_marca}
+    else:
+        mercados["fora_marca"] = {"nome": f"{fora} Não Marca", "prob": 100 - resultado.prob_fora_marca}
+
     if resultado.prob_over_cantos >= 50:
         mercados["escanteios"] = {"nome": f"Mais de {resultado.linha_cantos} Escanteios", "prob": resultado.prob_over_cantos}
     else:
@@ -178,14 +188,31 @@ def montar_mercados(resultado, casa, fora):
 
 
 def gerar_multiplas(resultado, casa, fora):
+    """
+    Distribui os mercados disponíveis entre 5 múltiplas tentando:
+    1. Nunca colocar duas categorias de CONFIABILIDADE BAIXA na mesma
+       múltipla (evita que 1 jogo ruim de cartões/chutes no gol quebre
+       2+ pernas de uma vez — foi exatamente isso que aconteceu na
+       aposta perdida do Atlético-MG x Bahia em 21/07/2026).
+    2. Espalhar as categorias entre as 5 múltiplas em vez de reciclar
+       sempre os mesmos 3-4 "campeões" — cada categoria aparece no
+       máximo em 2 das 5 múltiplas.
+
+    Classificação de confiabilidade (observada nos jogos analisados
+    nesta conversa, não é estatística formal — reavaliar com o
+    diagnostico_calibracao.py conforme mais jogos acumularem):
+      ALTA:  resultado, gols            (acerto consistente em vários jogos)
+      MÉDIA: escanteios, btts, chutes_casa, chutes_fora, casa_marca, fora_marca
+      BAIXA: cartoes, chutes_gol_casa, chutes_gol_fora  (erros repetidos)
+    """
     mercados = montar_mercados(resultado, casa, fora)
 
     combos = [
-        ("Múltipla 1 — Mais Segura", ["resultado", "gols"]),
-        ("Múltipla 2 — Equilibrada", ["resultado", "gols", "btts"]),
-        ("Múltipla 3 — Mercados Alternativos", ["gols", "escanteios", "cartoes"]),
-        ("Múltipla 4 — Mais Arriscada", ["resultado", "gols", "btts", "escanteios"]),
-        ("Múltipla 5 — Chutes", ["chutes_casa", "chutes_fora", "chutes_gol_casa", "chutes_gol_fora"]),
+        ("Múltipla 1 — Mais Segura", ["resultado", "gols", "escanteios"]),
+        ("Múltipla 2 — Foco no Mandante", ["casa_marca", "chutes_casa", "chutes_gol_casa"]),
+        ("Múltipla 3 — Foco no Visitante", ["fora_marca", "chutes_fora", "chutes_gol_fora"]),
+        ("Múltipla 4 — Ambas Marcam + Cartões", ["btts", "cartoes", "resultado"]),
+        ("Múltipla 5 — Mais Arriscada (Mix)", ["casa_marca", "fora_marca", "cartoes"]),
     ]
 
     multiplas = []
