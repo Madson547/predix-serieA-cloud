@@ -6,6 +6,47 @@ from poisson import MotorPoisson
 from qualitativo import calcular_fator_qualitativo, buscar_noticias_recentes, buscar_ajuste_manual
 from previsoes import salvar_previsao, buscar_previsoes
 
+import streamlit as st
+
+# 1. Definição do usuário e senha (substitua pelos seus dados)
+USUARIO_CORRETO = "admin"
+SENHA_CORRETA = "seriea2026"
+
+# 2. Inicializa o estado de login se não existir
+if "logado" not in st.session_state:
+    st.session_state.logado = False
+
+# 3. Função que desenha a tela de login
+def tela_login():
+    st.title("⚽ Previsor Esportivo - Série A")
+    st.subheader("Área Restrita")
+    
+    usuario = st.text_input("Usuário")
+    senha = st.text_input("Senha", type="password")
+    
+    if st.button("Entrar"):
+        if usuario == USUARIO_CORRETO and senha == SENHA_CORRETA:
+            st.session_state.logado = True
+            st.rerun()
+        else:
+            st.error("Usuário ou senha incorretos.")
+
+# 4. Controle de acesso
+if not st.session_state.logado:
+    tela_login()
+else:
+    # Botão para deslogar
+    if st.sidebar.button("Sair do App"):
+        st.session_state.logado = False
+        st.rerun()
+        
+    # --- O CÓDIGO DO SEU APP COMEÇA AQUI ---
+    st.title("Painel de Previsões - Brasileirão Série A")
+    st.write("Bem-vindo! Aqui estão as análises dos próximos jogos...")
+    
+    # [Cole o restante das suas funções e lógica do previsor abaixo desta linha]
+
+
 st.set_page_config(layout="wide", page_title="Predix Sports")
 
 st.markdown("""
