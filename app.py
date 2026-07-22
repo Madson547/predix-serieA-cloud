@@ -8,15 +8,17 @@ from previsoes import salvar_previsao, buscar_previsoes
 
 import streamlit as st
 
-# 1. Definição do usuário e senha (substitua pelos seus dados)
+import streamlit as st
+
+# 1. Definição do usuário e senha
 USUARIO_CORRETO = "admin"
 SENHA_CORRETA = "seriea2026"
 
-# 2. Inicializa o estado de login se não existir
+# 2. Inicializa o estado de login
 if "logado" not in st.session_state:
     st.session_state.logado = False
 
-# 3. Função que desenha a tela de login
+# 3. Função da tela de login
 def tela_login():
     st.title("⚽ Previsor Esportivo - Série A")
     st.subheader("Área Restrita")
@@ -31,20 +33,24 @@ def tela_login():
         else:
             st.error("Usuário ou senha incorretos.")
 
-# 4. Controle de acesso
+# 4. Controle de Fluxo Bloqueante
 if not st.session_state.logado:
     tela_login()
 else:
-    # Botão para deslogar
+    # Botão para deslogar na barra lateral
     if st.sidebar.button("Sair do App"):
         st.session_state.logado = False
         st.rerun()
         
-    # --- O CÓDIGO DO SEU APP COMEÇA AQUI ---
-    st.title("Painel de Previsões - Brasileirão Série A")
-    st.write("Bem-vindo! Aqui estão as análises dos próximos jogos...")
+    # ---------------------------------------------------------
+    # TUDO ABAIXO DAQUI SÓ APARECE DEPOIS DE LOGAR
+    # ---------------------------------------------------------
+    st.title("⚽ Predix Sports — Análise Quantitativa Série A 2026")
     
-    # [Cole o restante das suas funções e lógica do previsor abaixo desta linha]
+    # [ATENÇÃO: Cole aqui todo o resto do seu código atual]
+    # Certifique-se de aplicar o recuo (Tab ou 4 espaços) 
+    # em todas as linhas do seu código original que colar aqui.
+
 
 
 st.set_page_config(layout="wide", page_title="Predix Sports")
