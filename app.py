@@ -1,12 +1,11 @@
 import streamlit as st
 import pandas as pd
+import json
 from datetime import date
 from database import supabase
 from poisson import MotorPoisson
 from qualitativo import calcular_fator_qualitativo, buscar_noticias_recentes, buscar_ajuste_manual
 from previsoes import salvar_previsao, buscar_previsoes
-
-import streamlit as st
 
 st.set_page_config(layout="wide", page_title="Predix Sports")
 
@@ -288,8 +287,9 @@ with aba_painel:
                 st.success(f"{medalha} **{item['mercado']}** — Confiança: {item['confianca']}%{odd_txt}")
 
             if st.button("💾 Salvar previsão", key=f"salvar_{jogo['casa_nome']}_{jogo['fora_nome']}_{jogo.get('data','')}"):
-                if salvar_previsao(resultado, jogo['casa_nome'], jogo['fora_nome'], jogo.get('data'), top_3):
-                    st.success("Previsão salva! Confira depois na aba 📈 Medidor de Desempenho.")
+                multiplas_pra_salvar = gerar_multiplas(resultado, jogo['casa_nome'], jogo['fora_nome'])
+                if salvar_previsao(resultado, jogo['casa_nome'], jogo['fora_nome'], jogo.get('data'), top_3, multiplas_pra_salvar):
+                    st.success("Previsão + múltiplas salvas! Confira depois na aba 📈 Medidor de Desempenho.")
                 else:
                     st.error("Não consegui salvar — confira o log do Streamlit Cloud.")
 
@@ -383,6 +383,13 @@ with aba_performance:
                 st.write(f"Escanteios: média {p['cantos_ft']} | linha {p['linha_cantos']} | over: {p['prob_over_cantos']}%")
                 st.write(f"Cartões: média {p['cartoes_ft']} | linha {p['linha_cartoes']} | over: {p['prob_over_cartoes']}%")
                 st.write(f"Placar mais provável: {p['placar_mais_provavel']}")
+
+                multiplas_salvas = json.loads(p["multiplas_json"]) if p.get("multiplas_json") else []
+                if multiplas_salvas:
+                    st.markdown("**Múltiplas geradas nessa previsão:**")
+                    for m in multiplas_salvas:
+                        pernas_txt = " + ".join(f"{leg['nome']} ({leg['prob']:.1f}%)" for leg in m["pernas"])
+                        st.caption(f"{m['titulo']}: {pernas_txt} → combinada {m['prob_combinada']}%")
 
                 jogo_real = supabase.table("jogos").select("gols_casa,gols_fora,status") \
                     .eq("casa_nome", p['time_casa']).eq("fora_nome", p['time_fora']) \
