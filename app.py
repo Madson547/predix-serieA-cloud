@@ -15,30 +15,6 @@ st.markdown("""
     </style>
 """, unsafe_allow_html=True)
 
-
-def _verificar_senha() -> bool:
-    """Bloqueia o app até a senha certa ser digitada. A senha fica em
-    st.secrets['APP_PASSWORD'] (Streamlit Cloud -> app -> Settings ->
-    Secrets), NUNCA escrita no código. Usa session_state pra só pedir
-    uma vez por sessão do navegador, não a cada clique."""
-    if st.session_state.get("autenticado", False):
-        return True
-
-    def _checar():
-        senha_certa = st.secrets.get("APP_PASSWORD", "")
-        digitada = st.session_state.get("senha_input", "")
-        st.session_state["autenticado"] = bool(senha_certa) and digitada == senha_certa
-
-    st.markdown("## 🔒 Predix Sports — Acesso restrito")
-    st.text_input("Senha:", type="password", key="senha_input", on_change=_checar)
-    if st.session_state.get("autenticado") is False and "senha_input" in st.session_state:
-        st.error("Senha incorreta.")
-    return False
-
-
-if not _verificar_senha():
-    st.stop()
-
 motor = MotorPoisson()
 MEDALHAS = ["🥇", "🥈", "🥉"]
 
@@ -272,11 +248,7 @@ def colorir_tabela(row):
 partidas = carregar_partidas()
 tabela = carregar_tabela()
 
-if not partidas:
-    st.warning("⚠️ Nenhum jogo encontrado na janela de datas atual. Verifique se o robô de coleta rodou recentemente.")
-    st.stop()
-
-lista_confrontos = [f"{j['casa_nome']} x {j['fora_nome']}" for j in partidas]
+lista_confrontos = [f"{j['casa_nome']} x {j['fora_nome']}" for j in partidas] if partidas else []
 
 aba_painel, aba_multiplas, aba_tabela, aba_performance = st.tabs([
     "📊 Painel Analítico",
@@ -287,95 +259,104 @@ aba_painel, aba_multiplas, aba_tabela, aba_performance = st.tabs([
 
 with aba_painel:
     st.markdown("## ⚽ Predix Sports — Análise Quantitativa Série A 2026")
-    col1, col2 = st.columns([1.5, 1.5])
 
-    with col1:
-        st.markdown("### 🎛️ Selecione o Confronto")
-        confronto_sel = st.selectbox("Escolha a Partida:", lista_confrontos)
-        jogo = [j for j in partidas if f"{j['casa_nome']} x {j['fora_nome']}" == confronto_sel][0]
+    if not partidas:
+        st.warning("⚠️ Nenhum jogo encontrado na janela de datas atual. Verifique se o robô de coleta rodou recentemente.")
+        st.caption("As outras abas (Tabela e Medidor de Desempenho) continuam funcionando normalmente.")
+    else:
+        col1, col2 = st.columns([1.5, 1.5])
 
-        resultado = analisar_confronto(jogo['casa_nome'], jogo['fora_nome'], jogo.get('data'))
+        with col1:
+            st.markdown("### 🎛️ Selecione o Confronto")
+            confronto_sel = st.selectbox("Escolha a Partida:", lista_confrontos)
+            jogo = [j for j in partidas if f"{j['casa_nome']} x {j['fora_nome']}" == confronto_sel][0]
 
-        st.markdown(f"🗓️ **Data:** {jogo.get('data','')} | 🕒 **Hora:** {jogo.get('hora','')} | **Status:** {jogo.get('status_desc','')}")
-        st.markdown("---")
+            resultado = analisar_confronto(jogo['casa_nome'], jogo['fora_nome'], jogo.get('data'))
 
-        if resultado:
-            if getattr(resultado, "ajuste_manual_aplicado", False):
-                st.caption("📝 Ajuste qualitativo manual (planilha) aplicado neste confronto.")
-
-            top_3 = construir_top_apostas(resultado, jogo['casa_nome'], jogo['fora_nome'])
-            st.markdown("### 🔥 TOP 3 MELHORES APOSTAS")
-            for item in top_3:
-                medalha = MEDALHAS[item["posicao"] - 1]
-                odd_txt = f" | Odd Justa: {item['odd_justa']}" if item.get("odd_justa") else ""
-                st.success(f"{medalha} **{item['mercado']}** — Confiança: {item['confianca']}%{odd_txt}")
-
-            if st.button("💾 Salvar previsão", key=f"salvar_{jogo['casa_nome']}_{jogo['fora_nome']}_{jogo.get('data','')}"):
-                multiplas_pra_salvar = gerar_multiplas(resultado, jogo['casa_nome'], jogo['fora_nome'])
-                if salvar_previsao(resultado, jogo['casa_nome'], jogo['fora_nome'], jogo.get('data'), top_3, multiplas_pra_salvar):
-                    st.success("Previsão + múltiplas salvas! Confira depois na aba 📈 Medidor de Desempenho.")
-                else:
-                    st.error("Não consegui salvar — confira o log do Streamlit Cloud.")
-
+            st.markdown(f"🗓️ **Data:** {jogo.get('data','')} | 🕒 **Hora:** {jogo.get('hora','')} | **Status:** {jogo.get('status_desc','')}")
             st.markdown("---")
-            st.markdown("### 🎯 Todas as Probabilidades")
-            st.info(f"🟦 Vitória {jogo['casa_nome']}: {resultado.prob_casa}%")
-            st.info(f"🟨 Empate: {resultado.prob_empate}%")
-            st.info(f"🟦 Vitória {jogo['fora_nome']}: {resultado.prob_fora}%")
-            st.info(f"🤝 Ambas Marcam: {resultado.prob_btts}%")
-            st.success(f"🟩 Gols FT (>1.5): {resultado.over15_ft}%")
-            st.success(f"🟩 Gols FT (>2.5): {resultado.over25_ft}%")
-            st.warning(f"🟫 Escanteios FT: média {resultado.cantos_ft} | Mais de {resultado.linha_cantos}: {resultado.prob_over_cantos}%")
-            st.error(f"🟥 Cartões FT: média {resultado.cartoes_ft} | Mais de {resultado.linha_cartoes}: {resultado.prob_over_cartoes}%")
-            st.info(f"🎯 Chutes {jogo['casa_nome']}: média {resultado.chutes_casa} | Mais de {resultado.linha_chutes_casa}: {resultado.prob_over_chutes_casa}%")
-            st.info(f"🎯 Chutes {jogo['fora_nome']}: média {resultado.chutes_fora} | Mais de {resultado.linha_chutes_fora}: {resultado.prob_over_chutes_fora}%")
-            st.success(f"🥅 Chutes no gol {jogo['casa_nome']}: média {resultado.chutes_gol_casa} | Mais de {resultado.linha_chutes_gol_casa}: {resultado.prob_over_chutes_gol_casa}%")
-            st.success(f"🥅 Chutes no gol {jogo['fora_nome']}: média {resultado.chutes_gol_fora} | Mais de {resultado.linha_chutes_gol_fora}: {resultado.prob_over_chutes_gol_fora}%")
-            st.info(f"🏆 Placar mais provável: **{resultado.placar_mais_provavel}**")
-        else:
-            st.warning("Análise não disponível — time não encontrado no banco.")
 
-    with col2:
-        st.markdown("### 📅 Próximos Jogos")
-        for i, j in enumerate(partidas):
-            status_icon = "🔴" if j.get("status") == "encerrado" else "🟢" if j.get("status") == "ao_vivo" else "⚪"
-            st.code(
-                f"⚽ CONFRONTO {i+1} | {j.get('data','')} às {j.get('hora','')}\n"
-                f"{j['casa_nome']} x {j['fora_nome']}\n"
-                f"{status_icon} {j.get('status_desc','Agendado')}"
-            )
+            if resultado:
+                if getattr(resultado, "ajuste_manual_aplicado", False):
+                    st.caption("📝 Ajuste qualitativo manual (planilha) aplicado neste confronto.")
+
+                top_3 = construir_top_apostas(resultado, jogo['casa_nome'], jogo['fora_nome'])
+                st.markdown("### 🔥 TOP 3 MELHORES APOSTAS")
+                for item in top_3:
+                    medalha = MEDALHAS[item["posicao"] - 1]
+                    odd_txt = f" | Odd Justa: {item['odd_justa']}" if item.get("odd_justa") else ""
+                    st.success(f"{medalha} **{item['mercado']}** — Confiança: {item['confianca']}%{odd_txt}")
+
+                if st.button("💾 Salvar previsão", key=f"salvar_{jogo['casa_nome']}_{jogo['fora_nome']}_{jogo.get('data','')}"):
+                    multiplas_pra_salvar = gerar_multiplas(resultado, jogo['casa_nome'], jogo['fora_nome'])
+                    if salvar_previsao(resultado, jogo['casa_nome'], jogo['fora_nome'], jogo.get('data'), top_3, multiplas_pra_salvar):
+                        st.success("Previsão + múltiplas salvas! Confira depois na aba 📈 Medidor de Desempenho.")
+                    else:
+                        st.error("Não consegui salvar — confira o log do Streamlit Cloud.")
+
+                st.markdown("---")
+                st.markdown("### 🎯 Todas as Probabilidades")
+                st.info(f"🟦 Vitória {jogo['casa_nome']}: {resultado.prob_casa}%")
+                st.info(f"🟨 Empate: {resultado.prob_empate}%")
+                st.info(f"🟦 Vitória {jogo['fora_nome']}: {resultado.prob_fora}%")
+                st.info(f"🤝 Ambas Marcam: {resultado.prob_btts}%")
+                st.success(f"🟩 Gols FT (>1.5): {resultado.over15_ft}%")
+                st.success(f"🟩 Gols FT (>2.5): {resultado.over25_ft}%")
+                st.warning(f"🟫 Escanteios FT: média {resultado.cantos_ft} | Mais de {resultado.linha_cantos}: {resultado.prob_over_cantos}%")
+                st.error(f"🟥 Cartões FT: média {resultado.cartoes_ft} | Mais de {resultado.linha_cartoes}: {resultado.prob_over_cartoes}%")
+                st.info(f"🎯 Chutes {jogo['casa_nome']}: média {resultado.chutes_casa} | Mais de {resultado.linha_chutes_casa}: {resultado.prob_over_chutes_casa}%")
+                st.info(f"🎯 Chutes {jogo['fora_nome']}: média {resultado.chutes_fora} | Mais de {resultado.linha_chutes_fora}: {resultado.prob_over_chutes_fora}%")
+                st.success(f"🥅 Chutes no gol {jogo['casa_nome']}: média {resultado.chutes_gol_casa} | Mais de {resultado.linha_chutes_gol_casa}: {resultado.prob_over_chutes_gol_casa}%")
+                st.success(f"🥅 Chutes no gol {jogo['fora_nome']}: média {resultado.chutes_gol_fora} | Mais de {resultado.linha_chutes_gol_fora}: {resultado.prob_over_chutes_gol_fora}%")
+                st.info(f"🏆 Placar mais provável: **{resultado.placar_mais_provavel}**")
+            else:
+                st.warning("Análise não disponível — time não encontrado no banco.")
+
+        with col2:
+            st.markdown("### 📅 Próximos Jogos")
+            for i, j in enumerate(partidas):
+                status_icon = "🔴" if j.get("status") == "encerrado" else "🟢" if j.get("status") == "ao_vivo" else "⚪"
+                st.code(
+                    f"⚽ CONFRONTO {i+1} | {j.get('data','')} às {j.get('hora','')}\n"
+                    f"{j['casa_nome']} x {j['fora_nome']}\n"
+                    f"{status_icon} {j.get('status_desc','Agendado')}"
+                )
 
 with aba_multiplas:
     st.markdown("## 🎰 Sugestões de Múltiplas")
-    st.caption(f"Confronto: **{jogo['casa_nome']} x {jogo['fora_nome']}**")
-    st.caption(
-        "⚠️ A probabilidade combinada assume que os mercados são independentes entre si — "
-        "na prática alguns se correlacionam (ex: Mais de 2.5 Gols tende a andar junto com "
-        "Ambas Marcam), então trate como referência, não como certeza matemática exata."
-    )
-    st.markdown("---")
 
-    if resultado:
-        multiplas = gerar_multiplas(resultado, jogo['casa_nome'], jogo['fora_nome'])
-        cores = ["#1b4332", "#123a4a", "#4a3b1b", "#4a1919"]
-        for i, m in enumerate(multiplas):
-            cor = cores[i % len(cores)]
-            pernas_html = "".join(
-                f'<div style="padding:3px 0;">✅ {p["nome"]} <span style="opacity:0.7;">({p["prob"]:.1f}%)</span></div>'
-                for p in m["pernas"]
-            )
-            odd_html = f" &nbsp;|&nbsp; Odd Justa: <b>{m['odd_justa']}</b>" if m["odd_justa"] else ""
-            st.markdown(f"""
-            <div style="background:{cor}; border-radius:10px; padding:16px 20px; margin-bottom:14px;">
-              <div style="font-weight:bold; font-size:17px; margin-bottom:10px;">{m['titulo']}</div>
-              {pernas_html}
-              <div style="margin-top:12px; font-size:15px;">
-                📊 Probabilidade de bater: <b>{m['prob_combinada']}%</b>{odd_html}
-              </div>
-            </div>
-            """, unsafe_allow_html=True)
+    if not partidas:
+        st.info("Sem jogos na janela atual — nada pra gerar múltiplas ainda. Confira a aba Painel Analítico.")
     else:
-        st.warning("Análise não disponível — time não encontrado no banco.")
+        st.caption(f"Confronto: **{jogo['casa_nome']} x {jogo['fora_nome']}**")
+        st.caption(
+            "⚠️ A probabilidade combinada assume que os mercados são independentes entre si — "
+            "na prática alguns se correlacionam (ex: Mais de 2.5 Gols tende a andar junto com "
+            "Ambas Marcam), então trate como referência, não como certeza matemática exata."
+        )
+        st.markdown("---")
+
+        if resultado:
+            multiplas = gerar_multiplas(resultado, jogo['casa_nome'], jogo['fora_nome'])
+            cores = ["#1b4332", "#123a4a", "#4a3b1b", "#4a1919"]
+            for i, m in enumerate(multiplas):
+                cor = cores[i % len(cores)]
+                pernas_html = "".join(
+                    f'<div style="padding:3px 0;">✅ {p["nome"]} <span style="opacity:0.7;">({p["prob"]:.1f}%)</span></div>'
+                    for p in m["pernas"]
+                )
+                odd_html = f" &nbsp;|&nbsp; Odd Justa: <b>{m['odd_justa']}</b>" if m["odd_justa"] else ""
+                st.markdown(f"""
+                <div style="background:{cor}; border-radius:10px; padding:16px 20px; margin-bottom:14px;">
+                  <div style="font-weight:bold; font-size:17px; margin-bottom:10px;">{m['titulo']}</div>
+                  {pernas_html}
+                  <div style="margin-top:12px; font-size:15px;">
+                    📊 Probabilidade de bater: <b>{m['prob_combinada']}%</b>{odd_html}
+                  </div>
+                </div>
+                """, unsafe_allow_html=True)
+        else:
+            st.warning("Análise não disponível — time não encontrado no banco.")
 
 with aba_tabela:
     st.subheader("🏆 Classificação — Brasileirão Série A 2026")
