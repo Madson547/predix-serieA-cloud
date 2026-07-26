@@ -22,6 +22,16 @@ jobs:
         run: |
           pip install -r requirements.txt
 
+      - name: Diagnostico dos secrets (nao expoe valores, so tamanho)
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+          DADOS_FUTEBOL_KEY: ${{ secrets.DADOS_FUTEBOL_KEY }}
+        run: |
+          echo "SUPABASE_URL tem ${#SUPABASE_URL} caracteres"
+          echo "SUPABASE_KEY tem ${#SUPABASE_KEY} caracteres"
+          echo "DADOS_FUTEBOL_KEY tem ${#DADOS_FUTEBOL_KEY} caracteres"
+
       - name: Rodar coletor.py
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
