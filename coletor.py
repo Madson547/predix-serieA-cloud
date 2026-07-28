@@ -250,17 +250,67 @@ def _media(lista: list, fallback: float = 0.0) -> float:
     return round(sum(lista) / len(lista), 2) if lista else fallback
 
 
-def buscar_stats_por_time() -> dict:
+def buscar_stats_por_time(rodadas: list[int] | None = None) -> dict:
     """
-    Percorre as partidas do campeonato e calcula, por time (casa/fora):
-      - médias de finalizações e finalizações no gol
-      - médias de escanteios e cartões amarelos
-    Faz uma chamada de API por partida (com estatísticas) — pode demorar
-    num campeonato cheio.
+    Percorre as partidas das rodadas selecionadas e calcula, por time
+    (casa/fora): médias de finalizações, finalizações no gol, escanteios
+    e cartões amarelos. Faz uma chamada de API por partida (com
+    estatísticas) — cada rodada processada consome ~10 chamadas extras.
+
+    CORREÇÃO 1 (26/07/2026 — diagnosticado via diagnostico_campos_api.py):
+    o JSON real da API vem como data -> estatisticas -> mandante/visitante,
+    não data -> mandante/visitante direto. Faltava o nível intermediário
+    "estatisticas", então est_m/est_v SEMPRE vinham vazios ({}), e todo
+    campo (chutes, chutes no gol, cartões — escanteios também, na prática)
+    caía no fallback fixo do poisson.py (11.0/9.5/4.0/3.3/2.2/2.3). Também
+    corrigido o nome do campo de finalizações: é "finalizacoes_total", não
+    "finalizacoes"/"chutes"/"shots".
+
+    CORREÇÃO 2 (26/07/2026 — diagnosticado via teste_stats_isolado.py):
+    a chamada SEM filtro de rodada (`/campeonatos/{id}/partidas`) só
+    devolve um lote fixo de ~15-20 partidas ANTIGAS (jan/fev, início da
+    temporada) — nunca as rodadas atuais. Por isso a função agora busca
+    partida por partida, RODADA POR RODADA (`?rodada=N`), do mesmo jeito
+    que buscar_partidas() já faz pra pegar a rodada atual.
+
+    Args:
+        rodadas: lista de números de rodada a processar.
+            - None (padrão) = modo INCREMENTAL: só as últimas 4 rodadas
+              a partir da atual. Pensado pra rodar automaticamente todo
+              dia sem gastar cota da API refazendo jogos antigos que já
+              não mudam mais.
+            - lista explícita (ex: list(range(1, 21))) = modo BACKFILL:
+              processa exatamente essas rodadas. Usado uma única vez pelo
+              backfill_stats_completo.py pra preencher o histórico inteiro.
+
+    NOTA: mesmo com as correções, "cartoes_amarelos" pode vir null da
+    própria API em algumas partidas (confirmado no JSON bruto) — isso é
+    limitação de dado da fonte, não bug nosso. O código já trata isso
+    corretamente (só adiciona à lista se o valor for > 0), então partidas
+    sem esse dado simplesmente não entram na média, em vez de contaminar
+    com zero falso.
     """
-    print("[STATS] Buscando partidas para calcular estatísticas...")
-    data = _get(f"/campeonatos/{CAMPEONATO_ID}/partidas")
-    partidas = data.get("data", [])
+    if rodadas is None:
+        rodada_atual = buscar_numero_rodada_atual() or 1
+        rodadas = list(range(max(1, rodada_atual - 3), rodada_atual + 1))
+        print(f"[STATS] Modo incremental — processando rodadas {rodadas}")
+    else:
+        print(f"[STATS] Modo backfill — processando {len(rodadas)} rodada(s): {rodadas}")
+
+    partidas = []
+    for rodada in rodadas:
+        data = _get(f"/campeonatos/{CAMPEONATO_ID}/partidas", params={"rodada": rodada})
+        partidas_rodada = data.get("data", [])
+        # Só partidas já encerradas têm estatística disponível — pular
+        # jogos futuros evita chamada desperdiçada.
+        encerradas_rodada = [
+            p for p in partidas_rodada
+            if p.get("placar_mandante") is not None and p.get("placar_visitante") is not None
+        ]
+        partidas.extend(encerradas_rodada)
+        time.sleep(0.2)
+
+    print(f"[STATS] {len(partidas)} partida(s) encerrada(s) encontrada(s) nas rodadas selecionadas")
 
     stats = {}
     for p in partidas:
@@ -285,15 +335,22 @@ def buscar_stats_por_time() -> dict:
 
         est_data = _get(f"/partidas/{pid}/estatisticas")
         time.sleep(0.3)
-        est = est_data.get("data", {})
+
+        # CORREÇÃO 1: nível "estatisticas" estava faltando na leitura.
+        # Estrutura real: {"data": {"estatisticas": {"mandante": {...}, "visitante": {...}}}}
+        est_raiz = est_data.get("data", {})
+        est = est_raiz.get("estatisticas", {})
         if not est:
             continue
 
         est_m = est.get("mandante", {})
         est_v = est.get("visitante", {})
 
-        fin_m  = float(est_m.get("finalizacoes") or est_m.get("chutes") or est_m.get("shots") or 0)
-        fin_v  = float(est_v.get("finalizacoes") or est_v.get("chutes") or est_v.get("shots") or 0)
+        # CORREÇÃO: nome real do campo é "finalizacoes_total".
+        fin_m  = float(est_m.get("finalizacoes_total") or est_m.get("finalizacoes")
+                       or est_m.get("chutes") or est_m.get("shots") or 0)
+        fin_v  = float(est_v.get("finalizacoes_total") or est_v.get("finalizacoes")
+                       or est_v.get("chutes") or est_v.get("shots") or 0)
         fing_m = float(est_m.get("finalizacoes_no_gol") or est_m.get("chutes_a_gol")
                        or est_m.get("shots_on_target") or 0)
         fing_v = float(est_v.get("finalizacoes_no_gol") or est_v.get("chutes_a_gol")
@@ -316,7 +373,7 @@ def buscar_stats_por_time() -> dict:
     return stats
 
 
-def atualizar_stats_times():
+def atualizar_stats_times(rodadas: list[int] | None = None):
     """
     Atualiza fin_/fing_/esc_/cart_ por time — MAS só escreve uma coluna se
     essa execução realmente achou dado real pra ela. Antes, quando a API
@@ -325,8 +382,12 @@ def atualizar_stats_times():
     estivesse lá (seja de uma coleta anterior bem-sucedida, seja um valor
     que você tenha colocado manualmente no Supabase). Agora, sem dado novo,
     a coluna simplesmente não é tocada — o time mantém o que já tinha.
+
+    Args:
+        rodadas: repassado direto pra buscar_stats_por_time(). None = modo
+            incremental (últimas 4 rodadas). Lista explícita = backfill.
     """
-    stats = buscar_stats_por_time()
+    stats = buscar_stats_por_time(rodadas=rodadas)
     if not stats:
         return
 
