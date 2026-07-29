@@ -356,18 +356,18 @@ with aba_painel:
             st.warning(f"🟨 Faltas {jogo['casa_nome']}: média {resultado.faltas_casa} | Mais de {resultado.linha_faltas_casa}: {resultado.prob_over_faltas_casa}%")
             st.warning(f"🟨 Faltas {jogo['fora_nome']}: média {resultado.faltas_fora} | Mais de {resultado.linha_faltas_fora}: {resultado.prob_over_faltas_fora}%")
             st.info(f"🏆 Placar mais provável: **{resultado.placar_mais_provavel}**")
-        else:
-            st.warning("Análise não disponível — time não encontrado no banco.")
+    else:
+        st.warning("Análise não disponível — time não encontrado no banco.")
 
-    with col2:
-        st.markdown("### 📅 Próximos Jogos")
-        for i, j in enumerate(partidas):
-            status_icon = "🔴" if j.get("status") == "encerrado" else "🟢" if j.get("status") == "ao_vivo" else "⚪"
-            st.code(
-                f"⚽ CONFRONTO {i+1} | {j.get('data','')} às {j.get('hora','')}\n"
-                f"{j['casa_nome']} x {j['fora_nome']}\n"
-                f"{status_icon} {j.get('status_desc','Agendado')}"
-            )
+with col2:
+    st.markdown("### 📅 Próximos Jogos")
+    for i, j in enumerate(partidas):
+        status_icon = "🔴" if j.get("status") == "encerrado" else "🟢" if j.get("status") == "ao_vivo" else "⚪"
+        st.code(
+            f"⚽ CONFRONTO {i+1} | {j.get('data','')} às {j.get('hora','')}\n"
+            f"{j['casa_nome']} x {j['fora_nome']}\n"
+            f"{status_icon} {j.get('status_desc','Agendado')}"
+        )
 
 with aba_bingo:
     st.markdown("## 🎯 Bingo do Dia")
