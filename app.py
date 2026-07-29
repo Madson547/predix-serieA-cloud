@@ -106,6 +106,10 @@ def analisar_confronto(casa, fora, data_jogo=None):
         chutes_fora=_valor_ou_padrao(tf, "fin_fora", 9.5),
         chutes_gol_casa=_valor_ou_padrao(tc, "fing_casa", 4.0),
         chutes_gol_fora=_valor_ou_padrao(tf, "fing_fora", 3.3),
+        # Faltas reais por time (coletor.py) — fallback pros defaults do
+        # MotorPoisson se o time ainda não tiver dado coletado.
+        faltas_casa=_valor_ou_padrao(tc, "falta_casa", 10.0),
+        faltas_fora=_valor_ou_padrao(tf, "falta_fora", 11.0),
     )
     # Anexado à resposta só pra UI conseguir avisar quando um ajuste manual
     # (planilha) entrou no cálculo, sem precisar buscar de novo.
@@ -185,6 +189,17 @@ def montar_mercados(resultado, casa, fora):
     else:
         mercados["chutes_gol_fora"] = {"nome": f"Menos de {resultado.linha_chutes_gol_fora} Chutes no Gol ({fora})", "prob": 100 - resultado.prob_over_chutes_gol_fora}
 
+    # Faltas — por time, mesmo padrão de chutes/escanteios.
+    if resultado.prob_over_faltas_casa >= 50:
+        mercados["faltas_casa"] = {"nome": f"Mais de {resultado.linha_faltas_casa} Faltas ({casa})", "prob": resultado.prob_over_faltas_casa}
+    else:
+        mercados["faltas_casa"] = {"nome": f"Menos de {resultado.linha_faltas_casa} Faltas ({casa})", "prob": 100 - resultado.prob_over_faltas_casa}
+
+    if resultado.prob_over_faltas_fora >= 50:
+        mercados["faltas_fora"] = {"nome": f"Mais de {resultado.linha_faltas_fora} Faltas ({fora})", "prob": resultado.prob_over_faltas_fora}
+    else:
+        mercados["faltas_fora"] = {"nome": f"Menos de {resultado.linha_faltas_fora} Faltas ({fora})", "prob": 100 - resultado.prob_over_faltas_fora}
+
     return mercados
 
 
@@ -210,10 +225,10 @@ def gerar_multiplas(resultado, casa, fora):
 
     combos = [
         ("Múltipla 1 — Mais Segura", ["resultado", "gols", "escanteios"]),
-        ("Múltipla 2 — Foco no Mandante", ["casa_marca", "chutes_casa", "chutes_gol_casa"]),
-        ("Múltipla 3 — Foco no Visitante", ["fora_marca", "chutes_fora", "chutes_gol_fora"]),
-        ("Múltipla 4 — Ambas Marcam + Cartões", ["btts", "cartoes", "resultado"]),
-        ("Múltipla 5 — Mais Arriscada (Mix)", ["casa_marca", "fora_marca", "cartoes"]),
+        ("Múltipla 2 — Foco no Mandante", ["casa_marca", "chutes_casa", "faltas_fora"]),
+        ("Múltipla 3 — Foco no Visitante", ["fora_marca", "chutes_fora", "faltas_casa"]),
+        ("Múltipla 4 — Ambas Marcam + Cartões", ["btts", "cartoes", "faltas_casa"]),
+        ("Múltipla 5 — Mais Arriscada (Mix)", ["casa_marca", "fora_marca", "faltas_fora"]),
     ]
 
     multiplas = []
@@ -308,6 +323,8 @@ with aba_painel:
                 st.info(f"🎯 Chutes {jogo['fora_nome']}: média {resultado.chutes_fora} | Mais de {resultado.linha_chutes_fora}: {resultado.prob_over_chutes_fora}%")
                 st.success(f"🥅 Chutes no gol {jogo['casa_nome']}: média {resultado.chutes_gol_casa} | Mais de {resultado.linha_chutes_gol_casa}: {resultado.prob_over_chutes_gol_casa}%")
                 st.success(f"🥅 Chutes no gol {jogo['fora_nome']}: média {resultado.chutes_gol_fora} | Mais de {resultado.linha_chutes_gol_fora}: {resultado.prob_over_chutes_gol_fora}%")
+                st.warning(f"🟨 Faltas {jogo['casa_nome']}: média {resultado.faltas_casa} | Mais de {resultado.linha_faltas_casa}: {resultado.prob_over_faltas_casa}%")
+                st.warning(f"🟨 Faltas {jogo['fora_nome']}: média {resultado.faltas_fora} | Mais de {resultado.linha_faltas_fora}: {resultado.prob_over_faltas_fora}%")
                 st.info(f"🏆 Placar mais provável: **{resultado.placar_mais_provavel}**")
             else:
                 st.warning("Análise não disponível — time não encontrado no banco.")
