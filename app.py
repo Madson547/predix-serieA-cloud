@@ -330,44 +330,40 @@ with aba_painel:
                 if st.button("💾 Salvar previsão", key=f"salvar_{jogo['casa_nome']}_{jogo['fora_nome']}_{jogo.get('data','')}"):
                     mercados_pra_salvar = montar_mercados(resultado, jogo['casa_nome'], jogo['fora_nome'])
                     multiplas_pra_salvar = gerar_multiplas(resultado, jogo['casa_nome'], jogo['fora_nome'])
-                try:
-                    sucesso = salvar_previsao(resultado, jogo['casa_name'], jogo['fora_name'], jogo.get('data'), top_3, multiplas_pra_salvar, mercados_pra_salvar)
-                    if sucesso:
-                        st.success("Previsão + mercados + múltiplas salvos! Confira depois nas abas 🎯 Bingo e 📊 Medidor de Desempenho.")
+                    if salvar_previsao(resultado, jogo['casa_nome'], jogo['fora_nome'], jogo.get('data'), top_3, multiplas_pra_salvar, mercados_pra_salvar):
+                        st.success("Previsão + mercados + múltiplas salvos! Confira depois nas abas 🎯 Bingo e 📈 Medidor de Desempenho.")
                     else:
-                        st.error("A função retornar False. Verifique os parâmetros passados.")
-                except Exception as e:
-                    st.error(f"Erro técnico detectado pelo Python: {e}")
+                        st.error("Não consegui salvar — confira o log do Streamlit Cloud.")
 
-            st.markdown("---")
-            st.markdown("### 🎯 Todas as Probabilidades")
-            st.info(f"🟦 Vitória {jogo['casa_nome']}: {resultado.prob_casa}%")
-            st.info(f"🟨 Empate: {resultado.prob_empate}%")
-            st.info(f"🟦 Vitória {jogo['fora_nome']}: {resultado.prob_fora}%")
-            st.info(f"🤝 Ambas Marcam: {resultado.prob_btts}%")
-            st.success(f"🟩 Gols FT (>1.5): {resultado.over15_ft}%")
-            st.success(f"🟩 Gols FT (>2.5): {resultado.over25_ft}%")
-            st.warning(f"🟫 Escanteios FT: média {resultado.cantos_ft} | Mais de {resultado.linha_cantos}: {resultado.prob_over_cantos}%")
-            st.error(f"🟥 Cartões FT: média {resultado.cartoes_ft} | Mais de {resultado.linha_cartoes}: {resultado.prob_over_cartoes}%")
-            st.info(f"🎯 Chutes {jogo['casa_nome']}: média {resultado.chutes_casa} | Mais de {resultado.linha_chutes_casa}: {resultado.prob_over_chutes_casa}%")
-            st.info(f"🎯 Chutes {jogo['fora_nome']}: média {resultado.chutes_fora} | Mais de {resultado.linha_chutes_fora}: {resultado.prob_over_chutes_fora}%")
-            st.success(f"🥅 Chutes no gol {jogo['casa_nome']}: média {resultado.chutes_gol_casa} | Mais de {resultado.linha_chutes_gol_casa}: {resultado.prob_over_chutes_gol_casa}%")
-            st.success(f"🥅 Chutes no gol {jogo['fora_nome']}: média {resultado.chutes_gol_fora} | Mais de {resultado.linha_chutes_gol_fora}: {resultado.prob_over_chutes_gol_fora}%")
-            st.warning(f"🟨 Faltas {jogo['casa_nome']}: média {resultado.faltas_casa} | Mais de {resultado.linha_faltas_casa}: {resultado.prob_over_faltas_casa}%")
-            st.warning(f"🟨 Faltas {jogo['fora_nome']}: média {resultado.faltas_fora} | Mais de {resultado.linha_faltas_fora}: {resultado.prob_over_faltas_fora}%")
-            st.info(f"🏆 Placar mais provável: **{resultado.placar_mais_provavel}**")
-                else:
-                    st.warning("Análise não disponível — time não encontrado no banco.")
+                st.markdown("---")
+                st.markdown("### 🎯 Todas as Probabilidades")
+                st.info(f"🟦 Vitória {jogo['casa_nome']}: {resultado.prob_casa}%")
+                st.info(f"🟨 Empate: {resultado.prob_empate}%")
+                st.info(f"🟦 Vitória {jogo['fora_nome']}: {resultado.prob_fora}%")
+                st.info(f"🤝 Ambas Marcam: {resultado.prob_btts}%")
+                st.success(f"🟩 Gols FT (>1.5): {resultado.over15_ft}%")
+                st.success(f"🟩 Gols FT (>2.5): {resultado.over25_ft}%")
+                st.warning(f"🟫 Escanteios FT: média {resultado.cantos_ft} | Mais de {resultado.linha_cantos}: {resultado.prob_over_cantos}%")
+                st.error(f"🟥 Cartões FT: média {resultado.cartoes_ft} | Mais de {resultado.linha_cartoes}: {resultado.prob_over_cartoes}%")
+                st.info(f"🎯 Chutes {jogo['casa_nome']}: média {resultado.chutes_casa} | Mais de {resultado.linha_chutes_casa}: {resultado.prob_over_chutes_casa}%")
+                st.info(f"🎯 Chutes {jogo['fora_nome']}: média {resultado.chutes_fora} | Mais de {resultado.linha_chutes_fora}: {resultado.prob_over_chutes_fora}%")
+                st.success(f"🥅 Chutes no gol {jogo['casa_nome']}: média {resultado.chutes_gol_casa} | Mais de {resultado.linha_chutes_gol_casa}: {resultado.prob_over_chutes_gol_casa}%")
+                st.success(f"🥅 Chutes no gol {jogo['fora_nome']}: média {resultado.chutes_gol_fora} | Mais de {resultado.linha_chutes_gol_fora}: {resultado.prob_over_chutes_gol_fora}%")
+                st.warning(f"🟨 Faltas {jogo['casa_nome']}: média {resultado.faltas_casa} | Mais de {resultado.linha_faltas_casa}: {resultado.prob_over_faltas_casa}%")
+                st.warning(f"🟨 Faltas {jogo['fora_nome']}: média {resultado.faltas_fora} | Mais de {resultado.linha_faltas_fora}: {resultado.prob_over_faltas_fora}%")
+                st.info(f"🏆 Placar mais provável: **{resultado.placar_mais_provavel}**")
+            else:
+                st.warning("Análise não disponível — time não encontrado no banco.")
 
-                with col2:
-                    st.markdown("### 📅 Próximos Jogos")
-                    for i, j in enumerate(partidas):
-                        status_icon = "🔴" if j.get("status") == "encerrado" else "🟢" if j.get("status") == "ao_vivo" else "⚪"
-                        st.code(
-                        f"⚽ CONFRONTO {i+1} | {j.get('data','')} às {j.get('hora','')}\n"
-                        f"{j['casa_nome']} x {j['fora_nome']}\n"
-                        f"{status_icon} {j.get('status_desc','Agendado')}"
-              )
+        with col2:
+            st.markdown("### 📅 Próximos Jogos")
+            for i, j in enumerate(partidas):
+                status_icon = "🔴" if j.get("status") == "encerrado" else "🟢" if j.get("status") == "ao_vivo" else "⚪"
+                st.code(
+                    f"⚽ CONFRONTO {i+1} | {j.get('data','')} às {j.get('hora','')}\n"
+                    f"{j['casa_nome']} x {j['fora_nome']}\n"
+                    f"{status_icon} {j.get('status_desc','Agendado')}"
+                )
 
 with aba_bingo:
     st.markdown("## 🎯 Bingo do Dia")
