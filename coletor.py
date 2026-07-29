@@ -327,6 +327,7 @@ def buscar_stats_por_time(rodadas: list[int] | None = None) -> dict:
                 "finalizacoes_gol_casa": [], "finalizacoes_gol_fora": [],
                 "escanteios_casa": [], "escanteios_fora": [],
                 "cartoes_casa": [], "cartoes_fora": [],
+                "faltas_casa": [], "faltas_fora": [],
             })
 
         pid = p.get("id")
@@ -359,6 +360,28 @@ def buscar_stats_por_time(rodadas: list[int] | None = None) -> dict:
         esc_v  = float(est_v.get("escanteios") or est_v.get("corners") or 0)
         cart_m = float(est_m.get("cartoes_amarelos") or est_m.get("yellow_cards") or 0)
         cart_v = float(est_v.get("cartoes_amarelos") or est_v.get("yellow_cards") or 0)
+        falta_m = float(est_m.get("faltas") or 0)
+        falta_v = float(est_v.get("faltas") or 0)
+
+        # SANIDADE (28/07/2026 — outlier confirmado: Fluminense apareceu com
+        # fin_casa=25.0, quase o dobro do range real de ~9-18 chutes/jogo dos
+        # outros times). Uma partida raramente passa de ~35 finalizações de
+        # um time só, ou ~20 finalizações no gol — valores acima disso são
+        # quase certamente erro da própria API (ex: contagem cumulativa em
+        # vez de só daquela partida). Descarta em vez de contaminar a média.
+        LIMITE_SANIDADE_CHUTES = 35
+        LIMITE_SANIDADE_CHUTES_GOL = 20
+
+        if fin_m > LIMITE_SANIDADE_CHUTES:
+            print(f"[AVISO] {nome_m}: finalizacoes_total suspeito ({fin_m}) na partida id={pid}, descartado")
+            fin_m = 0
+        if fin_v > LIMITE_SANIDADE_CHUTES:
+            print(f"[AVISO] {nome_v}: finalizacoes_total suspeito ({fin_v}) na partida id={pid}, descartado")
+            fin_v = 0
+        if fing_m > LIMITE_SANIDADE_CHUTES_GOL:
+            fing_m = 0
+        if fing_v > LIMITE_SANIDADE_CHUTES_GOL:
+            fing_v = 0
 
         if fin_m  > 0: stats[nome_m]["finalizacoes_casa"].append(fin_m)
         if fin_v  > 0: stats[nome_v]["finalizacoes_fora"].append(fin_v)
@@ -368,6 +391,8 @@ def buscar_stats_por_time(rodadas: list[int] | None = None) -> dict:
         if esc_v  > 0: stats[nome_v]["escanteios_fora"].append(esc_v)
         if cart_m > 0: stats[nome_m]["cartoes_casa"].append(cart_m)
         if cart_v > 0: stats[nome_v]["cartoes_fora"].append(cart_v)
+        if falta_m > 0: stats[nome_m]["faltas_casa"].append(falta_m)
+        if falta_v > 0: stats[nome_v]["faltas_fora"].append(falta_v)
 
     print(f"[STATS] Dados de {len(stats)} times processados")
     return stats
@@ -405,6 +430,10 @@ def atualizar_stats_times(rodadas: list[int] | None = None):
             update["fing_casa"] = _media(dados["finalizacoes_gol_casa"])
         if dados["finalizacoes_gol_fora"]:
             update["fing_fora"] = _media(dados["finalizacoes_gol_fora"])
+        if dados["faltas_casa"]:
+            update["falta_casa"] = _media(dados["faltas_casa"])
+        if dados["faltas_fora"]:
+            update["falta_fora"] = _media(dados["faltas_fora"])
 
         tem_esc = bool(dados["escanteios_casa"] or dados["escanteios_fora"])
         tem_cart = bool(dados["cartoes_casa"] or dados["cartoes_fora"])
