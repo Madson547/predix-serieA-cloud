@@ -64,6 +64,14 @@ class ResultadoPoisson:
     linha_chutes_gol_fora: float
     prob_over_chutes_gol_fora: float
 
+    # Faltas — POR TIME (não combinado), mesmo padrão de chutes/escanteios
+    faltas_casa: float
+    faltas_fora: float
+    linha_faltas_casa: float
+    prob_over_faltas_casa: float
+    linha_faltas_fora: float
+    prob_over_faltas_fora: float
+
     # Placar mais provável
     placar_mais_provavel: str
     prob_placar_mais_provavel: float
@@ -135,6 +143,8 @@ class MotorPoisson:
         chutes_fora: float = 9.5,
         chutes_gol_casa: float = 4.0,
         chutes_gol_fora: float = 3.3,
+        faltas_casa: float = 10.0,
+        faltas_fora: float = 11.0,
     ) -> ResultadoPoisson:
         """
         Calcula probabilidades completas para um confronto.
@@ -146,7 +156,9 @@ class MotorPoisson:
             media_gols_liga: Média real de gols/jogo da liga (calculada
                 a partir dos 20 times coletados em 2026-07)
             fator_qualitativo_*: Multiplicador por desfalques/notícias (0.80–1.20)
-            cantos_*, cartoes_*: Médias de escanteios e cartões por jogo
+            cantos_*, cartoes_*, chutes_*, chutes_gol_*, faltas_*: Médias
+                reais por time (coletor.py), com defaults de fallback caso
+                o time ainda não tenha dado real coletado.
         """
         media_casa = media_gols_liga * self.FATOR_CASA
         media_fora = media_gols_liga * self.FATOR_FORA
@@ -240,6 +252,12 @@ class MotorPoisson:
         linha_chutes_gol_fora = self._linha_media(chutes_gol_fora)
         prob_over_chutes_gol_fora = self._prob_over_poisson(chutes_gol_fora, linha_chutes_gol_fora) * 100
 
+        # Faltas — por time, mesmo padrão de chutes/escanteios.
+        linha_faltas_casa = self._linha_media(faltas_casa)
+        prob_over_faltas_casa = self._prob_over_poisson(faltas_casa, linha_faltas_casa) * 100
+        linha_faltas_fora = self._linha_media(faltas_fora)
+        prob_over_faltas_fora = self._prob_over_poisson(faltas_fora, linha_faltas_fora) * 100
+
         # Placar mais provável
         placar, prob_placar = self._placar_mais_provavel(matriz)
 
@@ -286,6 +304,12 @@ class MotorPoisson:
             prob_over_chutes_gol_casa=round(prob_over_chutes_gol_casa, 1),
             linha_chutes_gol_fora=linha_chutes_gol_fora,
             prob_over_chutes_gol_fora=round(prob_over_chutes_gol_fora, 1),
+            faltas_casa=round(faltas_casa, 1),
+            faltas_fora=round(faltas_fora, 1),
+            linha_faltas_casa=linha_faltas_casa,
+            prob_over_faltas_casa=round(prob_over_faltas_casa, 1),
+            linha_faltas_fora=linha_faltas_fora,
+            prob_over_faltas_fora=round(prob_over_faltas_fora, 1),
             placar_mais_provavel=placar,
             prob_placar_mais_provavel=round(prob_placar * 100, 1),
             odd_casa=_odd_justa(p_casa),
