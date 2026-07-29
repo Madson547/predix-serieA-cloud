@@ -330,10 +330,15 @@ with aba_painel:
                 if st.button("💾 Salvar previsão", key=f"salvar_{jogo['casa_nome']}_{jogo['fora_nome']}_{jogo.get('data','')}"):
                     mercados_pra_salvar = montar_mercados(resultado, jogo['casa_nome'], jogo['fora_nome'])
                     multiplas_pra_salvar = gerar_multiplas(resultado, jogo['casa_nome'], jogo['fora_nome'])
-                    if salvar_previsao(resultado, jogo['casa_nome'], jogo['fora_nome'], jogo.get('data'), top_3, multiplas_pra_salvar, mercados_pra_salvar):
-                        st.success("Previsão + mercados + múltiplas salvos! Confira depois nas abas 🎯 Bingo e 📈 Medidor de Desempenho.")
+                try:
+                    sucesso = salvar_previsao(resultado, jogo['casa_name'], jogo['fora_name'], jogo.get('data'), top_3, multiplas_pra_salvar, mercados_pra_salvar)
+                    if sucesso:
+                        st.success("Previsão + mercados + múltiplas salvos! Confira depois nas abas 🎯 Bingo e 📊 Medidor de Desempenho.")
                     else:
-                        st.error("Não consegui salvar — confira o log do Streamlit Cloud.")
+                        st.error("A função retornar False. Verifique os parâmetros passados.")
+                except Exception as e:
+                    st.error(f"Erro técnico detectado pelo Python: {e}")
+rror("Não consegui salvar — confira o log do Streamlit Cloud.")
 
                 st.markdown("---")
                 st.markdown("### 🎯 Todas as Probabilidades")
