@@ -8,10 +8,18 @@ import json
 from database import supabase
 
 
-def salvar_previsao(resultado, casa: str, fora: str, data_jogo: str, top3: list, multiplas: list = None) -> bool:
+def salvar_previsao(resultado, casa: str, fora: str, data_jogo: str, top3: list, multiplas: list = None, mercados: dict = None) -> bool:
     """Salva (ou atualiza) a previsão essencial de um confronto, incluindo
     as 5 múltiplas geradas — pra analisar rodada a rodada qual combinação
     de mercados performa melhor de verdade, não só mercado por mercado.
+
+    mercados: dict retornado por montar_mercados() (app.py), com TODOS os
+    13 mercados individuais já estruturados (tipo/nome/prob/linha/direcao).
+    É isso que o diagnostico.py usa depois pra calcular a taxa de acerto
+    real por categoria — sem isso, só dá pra comparar texto solto do
+    top3/múltiplas, que não dá pra cruzar com o resultado real de forma
+    confiável.
+
     Chamado manualmente pelo botão 'Salvar previsão' no app.py."""
     registro = {
         "data": data_jogo,
@@ -32,6 +40,7 @@ def salvar_previsao(resultado, casa: str, fora: str, data_jogo: str, top3: list,
         "placar_mais_provavel": resultado.placar_mais_provavel,
         "top3_json": json.dumps(top3, ensure_ascii=False),
         "multiplas_json": json.dumps(multiplas, ensure_ascii=False) if multiplas else None,
+        "mercados_json": json.dumps(mercados, ensure_ascii=False) if mercados else None,
     }
     try:
         existe = supabase.table("previsoes").select("id") \
@@ -45,6 +54,18 @@ def salvar_previsao(resultado, casa: str, fora: str, data_jogo: str, top3: list,
     except Exception as e:
         print(f"[ERRO] salvar_previsao: {e}")
         return False
+
+
+def buscar_previsoes_do_dia(data_jogo: str) -> list:
+    """Busca todas as previsões salvas pra uma data específica — usado
+    pela aba Bingo, que precisa cobrir todos os jogos analisados e
+    salvos no dia da análise, não só o confronto selecionado no Painel."""
+    try:
+        resp = supabase.table("previsoes").select("*").eq("data", data_jogo).execute()
+        return resp.data or []
+    except Exception as e:
+        print(f"[ERRO] buscar_previsoes_do_dia: {e}")
+        return []
 
 
 def buscar_previsoes(termo: str = "") -> list:
