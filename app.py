@@ -5,7 +5,8 @@ from datetime import date
 from database import supabase
 from poisson import MotorPoisson
 from qualitativo import calcular_fator_qualitativo, buscar_noticias_recentes, buscar_ajuste_manual
-from previsoes import salvar_previsao, buscar_previsoes
+from previsoes import salvar_previsao, buscar_previsoes, buscar_previsoes_do_dia
+from diagnostico import calcular_taxas_acerto, melhores_categorias, NOMES_CATEGORIAS
 
 st.set_page_config(layout="wide", page_title="Predix Sports Série A", page_icon="🇧🇷")
 
@@ -121,84 +122,107 @@ def montar_mercados(resultado, casa, fora):
     """
     Um mercado por categoria (evita combinar mercados redundantes ou
     contraditórios, tipo 'Mais de 1.5' com 'Mais de 2.5' na mesma múltipla).
+
+    Cada mercado carrega, além de nome/prob (usados na UI e nas múltiplas):
+    - tipo: chave da categoria (igual à chave do dict, redundante de propósito
+      pra sobreviver ao dict virar JSON solto)
+    - linha: valor numérico da linha (1.5, 2.5, linha de escanteios...) ou
+      None quando não se aplica (resultado, btts, time marca)
+    - direcao: lado escolhido, usado pelo diagnostico.py pra comparar com o
+      resultado real do jogo (gols_casa/gols_fora) sem precisar re-parsear
+      o texto do "nome"
+
+    direcao possíveis por tipo:
+      resultado    -> vitoria_casa | empate | vitoria_fora | dupla_1x | dupla_x2
+      gols         -> mais | menos      (junto com linha 1.5 ou 2.5)
+      btts         -> sim | nao
+      casa_marca   -> sim | nao
+      fora_marca   -> sim | nao
+      escanteios/cartoes/chutes_*/faltas_* -> mais | menos (linha correspondente)
     """
     mercados = {}
 
     candidatos_resultado = [
-        (f"Vitória {casa}", resultado.prob_casa),
-        ("Empate", resultado.prob_empate),
-        (f"Vitória {fora}", resultado.prob_fora),
-        (f"Dupla Chance: {casa} ou Empate", resultado.prob_dupla_1x),
-        (f"Dupla Chance: {fora} ou Empate", resultado.prob_dupla_x2),
+        (f"Vitória {casa}", resultado.prob_casa, "vitoria_casa"),
+        ("Empate", resultado.prob_empate, "empate"),
+        (f"Vitória {fora}", resultado.prob_fora, "vitoria_fora"),
+        (f"Dupla Chance: {casa} ou Empate", resultado.prob_dupla_1x, "dupla_1x"),
+        (f"Dupla Chance: {fora} ou Empate", resultado.prob_dupla_x2, "dupla_x2"),
     ]
-    mercados["resultado"] = dict(zip(("nome", "prob"), max(candidatos_resultado, key=lambda x: x[1])))
+    nome, prob, direcao = max(candidatos_resultado, key=lambda x: x[1])
+    mercados["resultado"] = {"tipo": "resultado", "nome": nome, "prob": prob, "linha": None, "direcao": direcao}
 
     candidatos_gols = [
-        ("Mais de 1.5 Gols", resultado.over15_ft),
-        ("Menos de 1.5 Gols", 100 - resultado.over15_ft),
-        ("Mais de 2.5 Gols", resultado.over25_ft),
-        ("Menos de 2.5 Gols", 100 - resultado.over25_ft),
+        ("Mais de 1.5 Gols", resultado.over15_ft, 1.5, "mais"),
+        ("Menos de 1.5 Gols", 100 - resultado.over15_ft, 1.5, "menos"),
+        ("Mais de 2.5 Gols", resultado.over25_ft, 2.5, "mais"),
+        ("Menos de 2.5 Gols", 100 - resultado.over25_ft, 2.5, "menos"),
     ]
-    mercados["gols"] = dict(zip(("nome", "prob"), max(candidatos_gols, key=lambda x: x[1])))
+    nome, prob, linha, direcao = max(candidatos_gols, key=lambda x: x[1])
+    mercados["gols"] = {"tipo": "gols", "nome": nome, "prob": prob, "linha": linha, "direcao": direcao}
 
     if resultado.prob_btts >= 50:
-        mercados["btts"] = {"nome": "Ambas Marcam (Sim)", "prob": resultado.prob_btts}
+        mercados["btts"] = {"tipo": "btts", "nome": "Ambas Marcam (Sim)", "prob": resultado.prob_btts, "linha": None, "direcao": "sim"}
     else:
-        mercados["btts"] = {"nome": "Ambas Marcam (Não)", "prob": 100 - resultado.prob_btts}
+        mercados["btts"] = {"tipo": "btts", "nome": "Ambas Marcam (Não)", "prob": 100 - resultado.prob_btts, "linha": None, "direcao": "nao"}
 
     if resultado.prob_casa_marca >= 50:
-        mercados["casa_marca"] = {"nome": f"{casa} Marca", "prob": resultado.prob_casa_marca}
+        mercados["casa_marca"] = {"tipo": "casa_marca", "nome": f"{casa} Marca", "prob": resultado.prob_casa_marca, "linha": None, "direcao": "sim"}
     else:
-        mercados["casa_marca"] = {"nome": f"{casa} Não Marca", "prob": 100 - resultado.prob_casa_marca}
+        mercados["casa_marca"] = {"tipo": "casa_marca", "nome": f"{casa} Não Marca", "prob": 100 - resultado.prob_casa_marca, "linha": None, "direcao": "nao"}
 
     if resultado.prob_fora_marca >= 50:
-        mercados["fora_marca"] = {"nome": f"{fora} Marca", "prob": resultado.prob_fora_marca}
+        mercados["fora_marca"] = {"tipo": "fora_marca", "nome": f"{fora} Marca", "prob": resultado.prob_fora_marca, "linha": None, "direcao": "sim"}
     else:
-        mercados["fora_marca"] = {"nome": f"{fora} Não Marca", "prob": 100 - resultado.prob_fora_marca}
+        mercados["fora_marca"] = {"tipo": "fora_marca", "nome": f"{fora} Não Marca", "prob": 100 - resultado.prob_fora_marca, "linha": None, "direcao": "nao"}
 
+    # A partir daqui: categorias ainda NÃO diagnosticáveis historicamente
+    # (coletor.py só salva a média móvel do time, não o valor real da
+    # partida) — mas já ficam estruturadas com tipo/linha/direcao pra não
+    # precisar mexer de novo quando o coletor passar a salvar o valor real.
     if resultado.prob_over_cantos >= 50:
-        mercados["escanteios"] = {"nome": f"Mais de {resultado.linha_cantos} Escanteios", "prob": resultado.prob_over_cantos}
+        mercados["escanteios"] = {"tipo": "escanteios", "nome": f"Mais de {resultado.linha_cantos} Escanteios", "prob": resultado.prob_over_cantos, "linha": resultado.linha_cantos, "direcao": "mais"}
     else:
-        mercados["escanteios"] = {"nome": f"Menos de {resultado.linha_cantos} Escanteios", "prob": 100 - resultado.prob_over_cantos}
+        mercados["escanteios"] = {"tipo": "escanteios", "nome": f"Menos de {resultado.linha_cantos} Escanteios", "prob": 100 - resultado.prob_over_cantos, "linha": resultado.linha_cantos, "direcao": "menos"}
 
     if resultado.prob_over_cartoes >= 50:
-        mercados["cartoes"] = {"nome": f"Mais de {resultado.linha_cartoes} Cartões", "prob": resultado.prob_over_cartoes}
+        mercados["cartoes"] = {"tipo": "cartoes", "nome": f"Mais de {resultado.linha_cartoes} Cartões", "prob": resultado.prob_over_cartoes, "linha": resultado.linha_cartoes, "direcao": "mais"}
     else:
-        mercados["cartoes"] = {"nome": f"Menos de {resultado.linha_cartoes} Cartões", "prob": 100 - resultado.prob_over_cartoes}
+        mercados["cartoes"] = {"tipo": "cartoes", "nome": f"Menos de {resultado.linha_cartoes} Cartões", "prob": 100 - resultado.prob_over_cartoes, "linha": resultado.linha_cartoes, "direcao": "menos"}
 
     # Chutes/chutes no gol são POR TIME, então cada um vira sua própria
     # categoria — dá pra combinar "chutes do mandante" com "chutes no gol
     # do visitante" na mesma múltipla sem repetir a mesma perna duas vezes.
     if resultado.prob_over_chutes_casa >= 50:
-        mercados["chutes_casa"] = {"nome": f"Mais de {resultado.linha_chutes_casa} Chutes ({casa})", "prob": resultado.prob_over_chutes_casa}
+        mercados["chutes_casa"] = {"tipo": "chutes_casa", "nome": f"Mais de {resultado.linha_chutes_casa} Chutes ({casa})", "prob": resultado.prob_over_chutes_casa, "linha": resultado.linha_chutes_casa, "direcao": "mais"}
     else:
-        mercados["chutes_casa"] = {"nome": f"Menos de {resultado.linha_chutes_casa} Chutes ({casa})", "prob": 100 - resultado.prob_over_chutes_casa}
+        mercados["chutes_casa"] = {"tipo": "chutes_casa", "nome": f"Menos de {resultado.linha_chutes_casa} Chutes ({casa})", "prob": 100 - resultado.prob_over_chutes_casa, "linha": resultado.linha_chutes_casa, "direcao": "menos"}
 
     if resultado.prob_over_chutes_fora >= 50:
-        mercados["chutes_fora"] = {"nome": f"Mais de {resultado.linha_chutes_fora} Chutes ({fora})", "prob": resultado.prob_over_chutes_fora}
+        mercados["chutes_fora"] = {"tipo": "chutes_fora", "nome": f"Mais de {resultado.linha_chutes_fora} Chutes ({fora})", "prob": resultado.prob_over_chutes_fora, "linha": resultado.linha_chutes_fora, "direcao": "mais"}
     else:
-        mercados["chutes_fora"] = {"nome": f"Menos de {resultado.linha_chutes_fora} Chutes ({fora})", "prob": 100 - resultado.prob_over_chutes_fora}
+        mercados["chutes_fora"] = {"tipo": "chutes_fora", "nome": f"Menos de {resultado.linha_chutes_fora} Chutes ({fora})", "prob": 100 - resultado.prob_over_chutes_fora, "linha": resultado.linha_chutes_fora, "direcao": "menos"}
 
     if resultado.prob_over_chutes_gol_casa >= 50:
-        mercados["chutes_gol_casa"] = {"nome": f"Mais de {resultado.linha_chutes_gol_casa} Chutes no Gol ({casa})", "prob": resultado.prob_over_chutes_gol_casa}
+        mercados["chutes_gol_casa"] = {"tipo": "chutes_gol_casa", "nome": f"Mais de {resultado.linha_chutes_gol_casa} Chutes no Gol ({casa})", "prob": resultado.prob_over_chutes_gol_casa, "linha": resultado.linha_chutes_gol_casa, "direcao": "mais"}
     else:
-        mercados["chutes_gol_casa"] = {"nome": f"Menos de {resultado.linha_chutes_gol_casa} Chutes no Gol ({casa})", "prob": 100 - resultado.prob_over_chutes_gol_casa}
+        mercados["chutes_gol_casa"] = {"tipo": "chutes_gol_casa", "nome": f"Menos de {resultado.linha_chutes_gol_casa} Chutes no Gol ({casa})", "prob": 100 - resultado.prob_over_chutes_gol_casa, "linha": resultado.linha_chutes_gol_casa, "direcao": "menos"}
 
     if resultado.prob_over_chutes_gol_fora >= 50:
-        mercados["chutes_gol_fora"] = {"nome": f"Mais de {resultado.linha_chutes_gol_fora} Chutes no Gol ({fora})", "prob": resultado.prob_over_chutes_gol_fora}
+        mercados["chutes_gol_fora"] = {"tipo": "chutes_gol_fora", "nome": f"Mais de {resultado.linha_chutes_gol_fora} Chutes no Gol ({fora})", "prob": resultado.prob_over_chutes_gol_fora, "linha": resultado.linha_chutes_gol_fora, "direcao": "mais"}
     else:
-        mercados["chutes_gol_fora"] = {"nome": f"Menos de {resultado.linha_chutes_gol_fora} Chutes no Gol ({fora})", "prob": 100 - resultado.prob_over_chutes_gol_fora}
+        mercados["chutes_gol_fora"] = {"tipo": "chutes_gol_fora", "nome": f"Menos de {resultado.linha_chutes_gol_fora} Chutes no Gol ({fora})", "prob": 100 - resultado.prob_over_chutes_gol_fora, "linha": resultado.linha_chutes_gol_fora, "direcao": "menos"}
 
     # Faltas — por time, mesmo padrão de chutes/escanteios.
     if resultado.prob_over_faltas_casa >= 50:
-        mercados["faltas_casa"] = {"nome": f"Mais de {resultado.linha_faltas_casa} Faltas ({casa})", "prob": resultado.prob_over_faltas_casa}
+        mercados["faltas_casa"] = {"tipo": "faltas_casa", "nome": f"Mais de {resultado.linha_faltas_casa} Faltas ({casa})", "prob": resultado.prob_over_faltas_casa, "linha": resultado.linha_faltas_casa, "direcao": "mais"}
     else:
-        mercados["faltas_casa"] = {"nome": f"Menos de {resultado.linha_faltas_casa} Faltas ({casa})", "prob": 100 - resultado.prob_over_faltas_casa}
+        mercados["faltas_casa"] = {"tipo": "faltas_casa", "nome": f"Menos de {resultado.linha_faltas_casa} Faltas ({casa})", "prob": 100 - resultado.prob_over_faltas_casa, "linha": resultado.linha_faltas_casa, "direcao": "menos"}
 
     if resultado.prob_over_faltas_fora >= 50:
-        mercados["faltas_fora"] = {"nome": f"Mais de {resultado.linha_faltas_fora} Faltas ({fora})", "prob": resultado.prob_over_faltas_fora}
+        mercados["faltas_fora"] = {"tipo": "faltas_fora", "nome": f"Mais de {resultado.linha_faltas_fora} Faltas ({fora})", "prob": resultado.prob_over_faltas_fora, "linha": resultado.linha_faltas_fora, "direcao": "mais"}
     else:
-        mercados["faltas_fora"] = {"nome": f"Menos de {resultado.linha_faltas_fora} Faltas ({fora})", "prob": 100 - resultado.prob_over_faltas_fora}
+        mercados["faltas_fora"] = {"tipo": "faltas_fora", "nome": f"Menos de {resultado.linha_faltas_fora} Faltas ({fora})", "prob": 100 - resultado.prob_over_faltas_fora, "linha": resultado.linha_faltas_fora, "direcao": "menos"}
 
     return mercados
 
@@ -265,9 +289,10 @@ tabela = carregar_tabela()
 
 lista_confrontos = [f"{j['casa_nome']} x {j['fora_nome']}" for j in partidas] if partidas else []
 
-aba_painel, aba_multiplas, aba_tabela, aba_performance = st.tabs([
+aba_painel, aba_multiplas, aba_bingo, aba_tabela, aba_performance = st.tabs([
     "📊 Painel Analítico",
     "🎰 Sugestões de Múltiplas",
+    "🎯 Bingo",
     "🏆 Tabela de Classificação",
     "📈 Medidor de Desempenho"
 ])
@@ -303,9 +328,10 @@ with aba_painel:
                     st.success(f"{medalha} **{item['mercado']}** — Confiança: {item['confianca']}%{odd_txt}")
 
                 if st.button("💾 Salvar previsão", key=f"salvar_{jogo['casa_nome']}_{jogo['fora_nome']}_{jogo.get('data','')}"):
+                    mercados_pra_salvar = montar_mercados(resultado, jogo['casa_nome'], jogo['fora_nome'])
                     multiplas_pra_salvar = gerar_multiplas(resultado, jogo['casa_nome'], jogo['fora_nome'])
-                    if salvar_previsao(resultado, jogo['casa_nome'], jogo['fora_nome'], jogo.get('data'), top_3, multiplas_pra_salvar):
-                        st.success("Previsão + múltiplas salvas! Confira depois na aba 📈 Medidor de Desempenho.")
+                    if salvar_previsao(resultado, jogo['casa_nome'], jogo['fora_nome'], jogo.get('data'), top_3, multiplas_pra_salvar, mercados_pra_salvar):
+                        st.success("Previsão + mercados + múltiplas salvos! Confira depois nas abas 🎯 Bingo e 📈 Medidor de Desempenho.")
                     else:
                         st.error("Não consegui salvar — confira o log do Streamlit Cloud.")
 
@@ -338,6 +364,96 @@ with aba_painel:
                     f"{j['casa_nome']} x {j['fora_nome']}\n"
                     f"{status_icon} {j.get('status_desc','Agendado')}"
                 )
+
+with aba_bingo:
+    st.markdown("## 🎯 Bingo do Dia")
+    st.caption(
+        "Critério: 2 mercados das categorias com maior taxa de acerto histórica "
+        "+ 1 mercado com probabilidade acima de 75% na análise de hoje. "
+        "Cobre todos os jogos analisados e salvos no dia."
+    )
+
+    hoje = date.today().isoformat()
+    previsoes_hoje = buscar_previsoes_do_dia(hoje)
+
+    if not previsoes_hoje:
+        st.info("Nenhuma previsão salva ainda hoje. Analise os jogos na aba 📊 Painel Analítico e clique em '💾 Salvar previsão' — o Bingo cobre todos os jogos salvos no dia.")
+    else:
+        taxas = calcular_taxas_acerto(min_amostras=15)
+        top_categorias = melhores_categorias(taxas, n=2)
+
+        with st.expander("📐 Taxas de acerto histórico por categoria (usadas no Bingo)"):
+            for cat in ["resultado", "gols", "btts", "casa_marca", "fora_marca"]:
+                d = taxas[cat]
+                status = "✅ confiável" if d["confiavel"] else f"⏳ coletando (mín. 15 amostras)"
+                st.write(f"**{NOMES_CATEGORIAS[cat]}**: {d['acertos']}/{d['total']} — {d['taxa']}% ({status})")
+            st.caption(
+                "Escanteios, cartões, chutes e faltas ainda não entram nesse diagnóstico: o coletor.py "
+                "só salva a média móvel do time, não o valor real de cada partida específica — sem isso "
+                "não dá pra comparar a previsão daquele jogo com o que realmente saiu naquele jogo."
+            )
+
+        usar_fallback = len(top_categorias) < 2
+        if usar_fallback:
+            st.warning(
+                "Ainda não há dados históricos suficientes (mínimo 15 avaliações por categoria) pra "
+                "confiar na taxa de acerto. Por enquanto o Bingo usa só o critério de probabilidade "
+                "acima de 75% em até 3 mercados por jogo — sem esconder isso de você."
+            )
+
+        st.markdown("---")
+
+        for p in previsoes_hoje:
+            if not p.get("mercados_json"):
+                continue
+            try:
+                mercados_jogo = json.loads(p["mercados_json"])
+            except (json.JSONDecodeError, TypeError):
+                continue
+
+            titulo_jogo = f"{p['time_casa']} x {p['time_fora']}"
+
+            if not usar_fallback:
+                pernas_historicas = [mercados_jogo[c] for c in top_categorias if c in mercados_jogo]
+                categorias_usadas = set(top_categorias)
+                candidatos_prob = [
+                    (chave, m) for chave, m in mercados_jogo.items()
+                    if chave not in categorias_usadas and m.get("prob", 0) > 75
+                ]
+                candidatos_prob.sort(key=lambda x: x[1]["prob"], reverse=True)
+
+                if len(pernas_historicas) < 2 or not candidatos_prob:
+                    st.markdown(f"**{titulo_jogo}**")
+                    st.caption("Sem card completo hoje (faltou mercado >75% além dos 2 históricos).")
+                    st.markdown("---")
+                    continue
+
+                _, perna_prob = candidatos_prob[0]
+                pernas_bingo = pernas_historicas + [perna_prob]
+                legenda_pernas = [f"🏆 {NOMES_CATEGORIAS.get(c, c)}" for c in top_categorias] + ["🎯 Probabilidade >75%"]
+            else:
+                candidatos_prob = sorted(
+                    [(chave, m) for chave, m in mercados_jogo.items() if m.get("prob", 0) > 75],
+                    key=lambda x: x[1]["prob"], reverse=True
+                )[:3]
+                if not candidatos_prob:
+                    st.markdown(f"**{titulo_jogo}**")
+                    st.caption("Sem card completo hoje (nenhum mercado passou de 75%).")
+                    st.markdown("---")
+                    continue
+                pernas_bingo = [m for _, m in candidatos_prob]
+                legenda_pernas = ["🎯 Probabilidade >75%"] * len(pernas_bingo)
+
+            prob_combinada = 1.0
+            for perna in pernas_bingo:
+                prob_combinada *= (perna["prob"] / 100)
+            prob_combinada = round(prob_combinada * 100, 1)
+
+            st.markdown(f"### {titulo_jogo}")
+            for legenda, perna in zip(legenda_pernas, pernas_bingo):
+                st.success(f"{legenda} — **{perna['nome']}** ({perna['prob']}%)")
+            st.info(f"📊 Probabilidade combinada do Bingo: **{prob_combinada}%**")
+            st.markdown("---")
 
 with aba_multiplas:
     st.markdown("## 🎰 Sugestões de Múltiplas")
