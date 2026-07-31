@@ -180,15 +180,48 @@ def buscar_numero_rodada_atual() -> int | None:
 # ==========================================================
 
 def buscar_partidas() -> list:
+    """
+    CORREÇÃO (31/07/2026 — confirmado via consulta direta na tabela `jogos`):
+    buscar só a "rodada calculada como atual" tinha o mesmo problema que já
+    tínhamos corrigido em buscar_stats_por_time() — a API pode marcar uma
+    rodada como 'encerrada' antes de TODOS os jogos dela realmente
+    terminarem (jogo atrasado/remarcado no meio da rodada). Quando isso
+    acontece, buscar_numero_rodada_atual() pula pra rodada seguinte e a
+    rodada anterior — com jogos que ainda estavam 'agendado' no nosso
+    banco — nunca mais é revisitada. Resultado confirmado: 10 jogos
+    ficaram travados em status='agendado' desde 28/07, mesmo depois de
+    vários já terem sido encerrados de verdade (ex: Coritiba x Cruzeiro,
+    Corinthians x Athletico Paranaense).
+
+    Agora busca uma JANELA de rodadas (atual + 2 anteriores), igual ao
+    princípio já usado em buscar_stats_por_time() — assim qualquer jogo
+    "esquecido" numa rodada anterior é reprocessado e tem status/placar
+    atualizados nas próximas execuções do coletor.
+    """
     numero_rodada = buscar_numero_rodada_atual()
-    params = {"rodada": numero_rodada} if numero_rodada else None
+    rodadas = list(range(max(1, numero_rodada - 2), numero_rodada + 1)) if numero_rodada else None
 
-    data = _get(f"/campeonatos/{CAMPEONATO_ID}/partidas", params=params)
-    partidas_raw = data.get("data", [])
+    partidas_raw = []
+    vistos = set()
 
-    # Fallback: se filtrar por rodada não trouxer nada, tenta sem filtro
-    if not partidas_raw and numero_rodada:
-        print("[API] Nada na rodada filtrada, tentando sem filtro...")
+    if rodadas:
+        for r in rodadas:
+            data = _get(f"/campeonatos/{CAMPEONATO_ID}/partidas", params={"rodada": r})
+            for p in data.get("data", []):
+                pid = p.get("id")
+                if pid in vistos:
+                    continue  # evita duplicar caso a mesma partida apareça em mais de uma rodada consultada
+                vistos.add(pid)
+                partidas_raw.append(p)
+            time.sleep(0.2)
+        print(f"[API] Janela de rodadas consultada: {rodadas}")
+    else:
+        data = _get(f"/campeonatos/{CAMPEONATO_ID}/partidas")
+        partidas_raw = data.get("data", [])
+
+    # Fallback: se a janela toda não trouxer nada, tenta sem filtro
+    if not partidas_raw:
+        print("[API] Nada nas rodadas filtradas, tentando sem filtro...")
         data = _get(f"/campeonatos/{CAMPEONATO_ID}/partidas")
         partidas_raw = data.get("data", [])
 
