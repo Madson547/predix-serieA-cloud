@@ -1,0 +1,41 @@
+name: Coletor Diario B - Predix Serie B
+
+on:
+  schedule:
+    - cron: '5 11 * * *'   # 08:05 horario de Brasilia (UTC-3) — 5 min depois do coletor da Série A, pra não competir pela cota da API ao mesmo tempo
+    - cron: '5 23 * * *'   # 20:05 horario de Brasilia
+  workflow_dispatch:        # permite rodar manualmente pelo botao "Run workflow" no GitHub
+
+jobs:
+  rodar-coletor-b:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout do repositorio
+        uses: actions/checkout@v4
+
+      - name: Configurar Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Instalar dependencias
+        run: |
+          pip install -r requirements.txt
+
+      - name: Diagnostico dos secrets (nao expoe valores, so tamanho)
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+          DADOS_FUTEBOL_KEY: ${{ secrets.DADOS_FUTEBOL_KEY }}
+        run: |
+          echo "SUPABASE_URL tem ${#SUPABASE_URL} caracteres"
+          echo "SUPABASE_KEY tem ${#SUPABASE_KEY} caracteres"
+          echo "DADOS_FUTEBOL_KEY tem ${#DADOS_FUTEBOL_KEY} caracteres"
+
+      - name: Rodar coletor_b.py
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+          DADOS_FUTEBOL_KEY: ${{ secrets.DADOS_FUTEBOL_KEY }}
+        run: |
+          python coletor_b.py
