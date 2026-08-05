@@ -107,6 +107,72 @@ def calcular_sentimento_time(nome: str, noticias: list) -> float:
 
 
 # ==========================================================
+# FORMA RECENTE (histórico real de jogos, não estimativa)
+# ==========================================================
+
+def calcular_forma_recente(nome_time: str, data_referencia: str | None, n: int = 5) -> str | None:
+    """
+    Calcula a forma recente de um time com base no aproveitamento de
+    pontos nos últimos N jogos ENCERRADOS (histórico real da tabela
+    'jogos'). Retorna None se não houver amostra suficiente (< 3 jogos)
+    ou se data_referencia não for informada — nesses casos o chamador
+    deve tratar como sinal ausente (não contribui pro fator qualitativo),
+    igual ao comportamento de calcular_eficiencia_conversao quando falta
+    dado.
+
+    NOVO sinal, adicional aos três que já existiam (eficiência de
+    conversão, sentimento de notícia, ajuste manual) — não substitui
+    nenhum deles.
+    """
+    if not data_referencia:
+        return None
+
+    try:
+        resp = (
+            supabase.table("jogos")
+            .select("casa_nome, fora_nome, gols_casa, gols_fora, data")
+            .or_(f"casa_nome.eq.{nome_time},fora_nome.eq.{nome_time}")
+            .eq("status", "encerrado")
+            .lt("data", data_referencia)
+            .order("data", desc=True)
+            .limit(n)
+            .execute()
+        )
+        jogos = resp.data or []
+    except Exception as e:
+        print(f"[ERRO] calcular_forma_recente: {e}")
+        return None
+
+    jogos_validos = [j for j in jogos if j.get("gols_casa") is not None and j.get("gols_fora") is not None]
+    if len(jogos_validos) < 3:
+        return None
+
+    pontos = 0
+    for j in jogos_validos:
+        if j["casa_nome"] == nome_time:
+            gm, gc = j["gols_casa"], j["gols_fora"]
+        else:
+            gm, gc = j["gols_fora"], j["gols_casa"]
+        if gm > gc:
+            pontos += 3
+        elif gm == gc:
+            pontos += 1
+
+    aproveitamento = pontos / (len(jogos_validos) * 3)
+
+    if aproveitamento >= 0.80:
+        return "otima"
+    elif aproveitamento >= 0.55:
+        return "boa"
+    elif aproveitamento >= 0.35:
+        return "neutra"
+    elif aproveitamento >= 0.15:
+        return "ruim"
+    else:
+        return "pessima"
+
+
+# ==========================================================
 # AJUSTE QUALITATIVO MANUAL (planilha -> tabela ajustes_qualitativos)
 # ==========================================================
 
@@ -146,17 +212,21 @@ def calcular_fator_qualitativo(
     dados_time: dict | None,
     noticias: list,
     ajuste_manual: float | None = None,
+    forma_recente: str | None = None,
 ) -> float:
     """
     Combina eficiência de conversão + sentimento de notícias + ajuste
-    qualitativo manual (planilha) num único multiplicador para o
-    MotorPoisson (fator_qualitativo_casa/fora). 1.0 = neutro.
+    qualitativo manual (planilha) + forma recente real (NOVO — histórico
+    de jogos, opcional) num único multiplicador para o MotorPoisson
+    (fator_qualitativo_casa/fora). 1.0 = neutro.
 
-    Os três componentes SOMAM desvios em torno de 1.0 (não se multiplicam
-    entre si) — assim o ajuste manual complementa o automático em vez de
-    substituí-lo ou de compor exponencialmente com ele. Faixa final: 0.75
-    a 1.25 (levemente mais ampla que antes, já que agora até três fontes
-    de sinal podem contribuir ao mesmo tempo).
+    Os quatro componentes SOMAM desvios em torno de 1.0 (não se
+    multiplicam entre si) — assim cada sinal complementa os outros em
+    vez de compor exponencialmente. forma_recente é o único argumento
+    novo e tem peso propositalmente menor que ajuste_manual (que reflete
+    julgamento humano específico do confronto): serve pra reforçar ou
+    contrariar levemente os outros sinais, não pra dominar sozinho.
+    Faixa final: 0.75 a 1.25 (mantida igual, mesmo com 4 sinais).
     """
     desvio = 0.0
 
@@ -169,6 +239,16 @@ def calcular_fator_qualitativo(
 
     if ajuste_manual is not None:
         desvio += (ajuste_manual - 1.0)  # ajuste_manual já vem na escala 0.80–1.20
+
+    ajuste_forma = {
+        "otima": 0.06,
+        "boa": 0.03,
+        "neutra": 0.0,
+        "ruim": -0.04,
+        "pessima": -0.07,
+    }
+    if forma_recente is not None:
+        desvio += ajuste_forma.get(forma_recente, 0.0)
 
     fator = 1.0 + desvio
     return round(max(0.75, min(1.25, fator)), 4)
