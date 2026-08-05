@@ -10,12 +10,6 @@ from diagnostico import calcular_taxas_acerto, melhores_categorias, NOMES_CATEGO
 
 st.set_page_config(layout="wide", page_title="Predix Sports Série A", page_icon="🇧🇷")
 
-st.markdown("""
-    <style>
-    .stApp { background-color: #0e1117; color: white; }
-    </style>
-""", unsafe_allow_html=True)
-
 motor = MotorPoisson()
 MEDALHAS = ["🥇", "🥈", "🥉"]
 
