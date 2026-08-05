@@ -1,6 +1,6 @@
 [theme]
 base = "Light Mode"
 primaryColor = "#3b82c4"
-backgroundColor = "#0e1117"
-secondaryBackgroundColor = "#1c2530"
-textColor = "#ffffff"
+backgroundColor = "#ffffff"
+secondaryBackgroundColor = "#f8f9fa"
+textColor = "#111827"
