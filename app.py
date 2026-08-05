@@ -19,11 +19,10 @@ def carregar_partidas():
     hoje = date.today().isoformat()
     resp = (
         supabase.table("jogos").select("*")
-        .gte("data", hoje)
+        .neq("status", "encerrado")
         .order("data").execute()
     )
     return resp.data
-
 
 @st.cache_data(ttl=300)
 def carregar_tabela():
