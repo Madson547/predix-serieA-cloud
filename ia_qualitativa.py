@@ -108,13 +108,14 @@ def analisar_texto_qualitativo(texto: str, casa: str, fora: str) -> dict:
 
 def salvar_ajuste_manual(time_casa: str, time_fora: str, data_jogo: str,
                           ajuste_casa: float, ajuste_fora: float,
-                          observacoes: str = "") -> bool:
+                          observacoes: str = "", sufixo_liga: str = "") -> bool:
     """
     Grava (ou atualiza) o ajuste manual pra esse confronto+data direto na
-    tabela ajustes_qualitativos — mesma tabela que buscar_ajuste_manual()
-    (qualitativo.py) já lê, então o efeito é imediato na próxima análise,
-    sem precisar rodar importar_qualitativos.py.
+    tabela ajustes_qualitativos/ajustes_qualitativos_b — mesma tabela que
+    buscar_ajuste_manual() (qualitativo.py) já lê, então o efeito é
+    imediato na próxima análise, sem precisar rodar importar_qualitativos.py.
     """
+    tabela = f"ajustes_qualitativos{sufixo_liga}"
     try:
         registro = {
             "time_casa": time_casa,
@@ -126,14 +127,14 @@ def salvar_ajuste_manual(time_casa: str, time_fora: str, data_jogo: str,
             "fonte": "ia_qualitativa",
             "atualizado_em": datetime.now().isoformat(),
         }
-        existe = supabase.table("ajustes_qualitativos").select("id") \
+        existe = supabase.table(tabela).select("id") \
             .ilike("time_casa", time_casa).ilike("time_fora", time_fora) \
             .eq("data", data_jogo).execute()
         if existe.data:
-            supabase.table("ajustes_qualitativos").update(registro) \
+            supabase.table(tabela).update(registro) \
                 .eq("id", existe.data[0]["id"]).execute()
         else:
-            supabase.table("ajustes_qualitativos").insert(registro).execute()
+            supabase.table(tabela).insert(registro).execute()
         return True
     except Exception as e:
         print(f"[ERRO] salvar_ajuste_manual: {e}")
