@@ -29,6 +29,7 @@ BASE_URL = "https://api.dadosfutebol.com.br/v1"
 CAMPEONATO_NOME_BUSCA = "série b"  # usado pra localizar o campeonato certo por nome
 TABELA_JOGOS = "jogos_b"
 TABELA_TIMES = "times_b"
+TABELA_ESTATISTICAS_PARTIDAS = "estatisticas_partidas_b"
 
 _CAMPEONATO_ID_CACHE = None  # preenchido na primeira chamada de _campeonato_id()
 
@@ -339,6 +340,42 @@ def _media(lista: list, fallback: float = 0.0) -> float:
     return round(sum(lista) / len(lista), 2) if lista else fallback
 
 
+def salvar_estatisticas_partida(
+    fixture_id, casa_nome, fora_nome, data_jogo,
+    escanteios_casa, escanteios_fora, cartoes_casa, cartoes_fora,
+    chutes_casa, chutes_fora, chutes_gol_casa, chutes_gol_fora,
+    faltas_casa, faltas_fora,
+):
+    """
+    Grava (upsert por fixture_id) o valor REAL de escanteios/cartões/
+    chutes/faltas daquela partida específica — não a média móvel do
+    time. Mesma lógica do coletor.py (Série A), apontando pra
+    estatisticas_partidas_b.
+    """
+    if not fixture_id:
+        return
+    try:
+        supabase.table(TABELA_ESTATISTICAS_PARTIDAS).upsert({
+            "fixture_id": fixture_id,
+            "casa_nome": casa_nome,
+            "fora_nome": fora_nome,
+            "data": data_jogo,
+            "escanteios_casa": escanteios_casa or None,
+            "escanteios_fora": escanteios_fora or None,
+            "cartoes_casa": cartoes_casa or None,
+            "cartoes_fora": cartoes_fora or None,
+            "chutes_casa": chutes_casa or None,
+            "chutes_fora": chutes_fora or None,
+            "chutes_gol_casa": chutes_gol_casa or None,
+            "chutes_gol_fora": chutes_gol_fora or None,
+            "faltas_casa": faltas_casa or None,
+            "faltas_fora": faltas_fora or None,
+            "data_atualizacao": datetime.now().isoformat(),
+        }, on_conflict="fixture_id").execute()
+    except Exception as e:
+        print(f"[ERRO] salvar_estatisticas_partida (fixture_id={fixture_id}): {e}")
+
+
 def buscar_stats_por_time(rodadas: list[int] | None = None) -> dict:
     """
     Percorre as partidas das rodadas selecionadas e calcula, por time
@@ -486,6 +523,17 @@ def buscar_stats_por_time(rodadas: list[int] | None = None) -> dict:
         if cart_v > 0: stats[nome_v]["cartoes_fora"].append(cart_v)
         if falta_m > 0: stats[nome_m]["faltas_casa"].append(falta_m)
         if falta_v > 0: stats[nome_v]["faltas_fora"].append(falta_v)
+
+        salvar_estatisticas_partida(
+            fixture_id=pid,
+            casa_nome=nome_m, fora_nome=nome_v,
+            data_jogo=_normalizar_data(p.get("data_realizacao", "")),
+            escanteios_casa=esc_m, escanteios_fora=esc_v,
+            cartoes_casa=cart_m, cartoes_fora=cart_v,
+            chutes_casa=fin_m, chutes_fora=fin_v,
+            chutes_gol_casa=fing_m, chutes_gol_fora=fing_v,
+            faltas_casa=falta_m, faltas_fora=falta_v,
+        )
 
     print(f"[STATS] Dados de {len(stats)} times processados")
     return stats
