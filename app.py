@@ -7,7 +7,7 @@ from poisson import MotorPoisson
 from qualitativo import calcular_fator_qualitativo, buscar_noticias_recentes, buscar_ajuste_manual, calcular_forma_recente
 from ia_qualitativa import analisar_texto_qualitativo, salvar_ajuste_manual
 from previsoes import salvar_previsao, buscar_previsoes, buscar_previsoes_do_dia
-from diagnostico import calcular_taxas_acerto, melhores_categorias, NOMES_CATEGORIAS
+from diagnostico import calcular_taxas_acerto, melhores_categorias, NOMES_CATEGORIAS, avaliar_mercados_previstos, gerar_relatorio_partida
 
 st.set_page_config(layout="wide", page_title="Predix Sports", page_icon="🇧🇷")
 
@@ -612,5 +612,21 @@ with aba_performance:
                 if jogo_real and jogo_real[0].get("status") == "encerrado":
                     gc, gf = jogo_real[0]["gols_casa"], jogo_real[0]["gols_fora"]
                     st.success(f"✅ Resultado real: {p['time_casa']} {gc} x {gf} {p['time_fora']}")
+
+                    avaliacoes = avaliar_mercados_previstos(
+                        p.get("mercados_json"), p['time_casa'], p['time_fora'], p['data'], sufixo_liga=SUFIXO
+                    )
+                    if avaliacoes:
+                        st.markdown("**Mercados previstos x resultado real:**")
+                        for a in avaliacoes:
+                            if a["acerto"] is True:
+                                st.markdown(f"✅ {a['nome_categoria']}: **{a['mercado']}** (previsto {a['confianca']}%)")
+                            elif a["acerto"] is False:
+                                st.markdown(f"❌ {a['nome_categoria']}: **{a['mercado']}** (previsto {a['confianca']}%)")
+                            else:
+                                st.caption(f"⏳ {a['nome_categoria']}: sem estatística de partida coletada ainda")
+
+                        relatorio = gerar_relatorio_partida(avaliacoes, p['time_casa'], p['time_fora'])
+                        st.info(f"📋 {relatorio}")
                 else:
                     st.caption("⏳ Jogo ainda não encerrado (ou sem placar salvo).")
