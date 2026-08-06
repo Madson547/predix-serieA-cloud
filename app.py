@@ -8,6 +8,8 @@ from qualitativo import calcular_fator_qualitativo, buscar_noticias_recentes, bu
 from ia_qualitativa import analisar_texto_qualitativo, salvar_ajuste_manual
 from previsoes import salvar_previsao, buscar_previsoes, buscar_previsoes_do_dia
 from diagnostico import calcular_taxas_acerto, melhores_categorias, NOMES_CATEGORIAS, avaliar_mercados_previstos, gerar_relatorio_partida
+from banca import salvar_aposta, buscar_apostas, atualizar_resultado_aposta, excluir_aposta, calcular_roi
+from ia_apostas import analisar_print_aposta
 
 st.set_page_config(layout="wide", page_title="Predix Sports", page_icon="🇧🇷")
 
@@ -398,12 +400,13 @@ tabela = carregar_tabela(SUFIXO)
 
 lista_confrontos = [f"{j['casa_nome']} x {j['fora_nome']}" for j in partidas] if partidas else []
 
-aba_painel, aba_multiplas, aba_bingo, aba_tabela, aba_performance = st.tabs([
+aba_painel, aba_multiplas, aba_bingo, aba_tabela, aba_performance, aba_banca = st.tabs([
     "📊 Painel Analítico",
     "🎰 Sugestões de Múltiplas",
     "🎯 Bingo",
     "🏆 Tabela de Classificação",
-    "📈 Medidor de Desempenho"
+    "📈 Medidor de Desempenho",
+    "🏦 Banca"
 ])
 
 with aba_painel:
@@ -719,3 +722,153 @@ with aba_performance:
                         st.info(f"📋 {relatorio}")
                 else:
                     st.caption("⏳ Jogo ainda não encerrado (ou sem placar salvo).")
+
+with aba_banca:
+    st.subheader("🏦 Controle de Banca")
+    st.caption(
+        "Registro das apostas reais feitas fora do app (Betano ou outra casa), "
+        "cruzado com o que o Predix já previu — pra medir retorno financeiro "
+        "de verdade, não só acerto estatístico."
+    )
+
+    sub_nova, sub_pendentes, sub_roi = st.tabs(["➕ Nova Aposta", "⏳ Pendentes", "📊 ROI"])
+
+    # ------------------------------------------------------------
+    # NOVA APOSTA — print do bilhete (opcional, via IA) + formulário
+    # ------------------------------------------------------------
+    with sub_nova:
+        st.markdown("#### 📸 Opção 1 — Sobe o print do bilhete confirmado")
+        st.caption(
+            "Print de LOGO DEPOIS de apostar (antes do jogo acontecer). A IA "
+            "pré-preenche os campos abaixo — confira e ajuste antes de salvar."
+        )
+        print_bilhete = st.file_uploader(
+            "Print do bilhete", type=["png", "jpg", "jpeg"], key="upload_bilhete"
+        )
+        if print_bilhete and st.button("🤖 Analisar print com IA", key="btn_analisar_bilhete"):
+            try:
+                with st.spinner("Lendo o bilhete..."):
+                    media_type = print_bilhete.type or "image/png"
+                    sugestao_aposta = analisar_print_aposta(print_bilhete.getvalue(), media_type)
+                st.session_state["nova_jogos"] = sugestao_aposta["jogos_envolvidos"]
+                st.session_state["nova_mercados"] = sugestao_aposta["mercados"]
+                st.session_state["nova_categoria"] = sugestao_aposta["categoria_estimada"]
+                st.session_state["nova_tipo"] = sugestao_aposta["tipo_aposta"]
+                if sugestao_aposta["odd"] is not None:
+                    st.session_state["nova_odd"] = sugestao_aposta["odd"]
+                if sugestao_aposta["stake"] is not None:
+                    st.session_state["nova_stake"] = sugestao_aposta["stake"]
+                st.success(f"✅ Bilhete lido (confiança da IA: {sugestao_aposta['confianca']}). Confira os campos abaixo.")
+            except Exception as e:
+                st.error(f"Erro ao analisar o print: {e}")
+
+        st.markdown("#### ✍️ Opção 2 — Ou preenche direto")
+        col_a, col_b = st.columns(2)
+        with col_a:
+            nova_data = st.date_input("Data da aposta", key="nova_data")
+            nova_liga = st.selectbox("Liga", ["Série A", "Série B", "Outra"], key="nova_liga_sel")
+            nova_jogos = st.text_input(
+                "Jogo(s) envolvido(s)", key="nova_jogos",
+                placeholder="ex: Corinthians x Athletico-PR"
+            )
+            nova_mercados = st.text_input(
+                "Mercado(s) apostado(s)", key="nova_mercados",
+                placeholder="ex: Menos de 10.5 Escanteios + 1X"
+            )
+        with col_b:
+            nova_categoria = st.selectbox(
+                "Categoria (pro ROI por categoria)",
+                ["resultado", "gols", "btts", "casa_marca", "fora_marca", "escanteios",
+                 "cartoes", "chutes_casa", "chutes_fora", "chutes_gol_casa", "chutes_gol_fora",
+                 "faltas_casa", "faltas_fora", "mista"],
+                key="nova_categoria"
+            )
+            nova_tipo = st.selectbox("Tipo", ["simples", "multipla"], key="nova_tipo")
+            nova_odd = st.number_input("Odd", min_value=1.01, step=0.01, key="nova_odd")
+            nova_stake = st.number_input("Valor apostado (R$)", min_value=0.0, step=1.0, key="nova_stake")
+
+        nova_obs = st.text_input("Observações (opcional)", key="nova_obs")
+
+        if st.button("💾 Salvar aposta como pendente", key="btn_salvar_aposta"):
+            if not nova_jogos or not nova_mercados or not nova_odd or not nova_stake:
+                st.error("Preenche pelo menos jogo, mercado, odd e valor apostado.")
+            else:
+                ok = salvar_aposta(
+                    data_aposta=nova_data.isoformat(), liga=nova_liga,
+                    jogos_envolvidos=nova_jogos, mercados=nova_mercados,
+                    categoria_estimada=nova_categoria, tipo_aposta=nova_tipo,
+                    odd=nova_odd, stake=nova_stake, observacoes=nova_obs,
+                    fonte_print=bool(print_bilhete),
+                )
+                if ok:
+                    st.success("✅ Aposta salva como pendente! Marca o resultado na aba '⏳ Pendentes' depois que o jogo acabar.")
+                else:
+                    st.error("Não consegui salvar — confira o log do Streamlit Cloud.")
+
+    # ------------------------------------------------------------
+    # PENDENTES — marcar ganhou/perdeu sem precisar de novo print
+    # ------------------------------------------------------------
+    with sub_pendentes:
+        pendentes = buscar_apostas(status="pendente")
+        if not pendentes:
+            st.info("Nenhuma aposta pendente. Registre uma na aba '➕ Nova Aposta'.")
+        else:
+            st.caption(f"{len(pendentes)} aposta(s) aguardando resultado.")
+            for ap in pendentes:
+                with st.expander(f"{ap['jogos_envolvidos']} — {ap['mercados']} (odd {ap['odd']}, R$ {ap['stake']:.2f})"):
+                    st.write(f"Data: {ap['data_aposta']} | Liga: {ap.get('liga','—')} | Tipo: {ap['tipo_aposta']}")
+                    st.caption(
+                        f"Se ganhou, retorno automático: R$ {ap['stake'] * ap['odd']:.2f} | "
+                        f"Se perdeu: -R$ {ap['stake']:.2f}"
+                    )
+                    col1, col2, col3 = st.columns(3)
+                    with col1:
+                        if st.button("✅ Ganhou", key=f"ganhou_{ap['id']}"):
+                            if atualizar_resultado_aposta(ap["id"], ganhou=True):
+                                st.success("Marcado como ganho!")
+                                st.rerun()
+                    with col2:
+                        if st.button("❌ Perdeu", key=f"perdeu_{ap['id']}"):
+                            if atualizar_resultado_aposta(ap["id"], ganhou=False):
+                                st.success("Marcado como perda.")
+                                st.rerun()
+                    with col3:
+                        if st.button("🗑️ Excluir (erro de digitação)", key=f"excluir_{ap['id']}"):
+                            if excluir_aposta(ap["id"]):
+                                st.success("Excluída.")
+                                st.rerun()
+
+    # ------------------------------------------------------------
+    # ROI — painel agregado
+    # ------------------------------------------------------------
+    with sub_roi:
+        roi = calcular_roi()
+        geral = roi["geral"]
+
+        if geral["total_apostas"] == 0:
+            st.info("Ainda não há apostas resolvidas (ganhou/perdeu) pra calcular ROI.")
+        else:
+            col1, col2, col3, col4 = st.columns(4)
+            col1.metric("Investido", f"R$ {geral['investido']:.2f}")
+            col2.metric("Retorno", f"R$ {geral['retorno']:.2f}")
+            col3.metric("Lucro/Prejuízo", f"R$ {geral['lucro']:.2f}", delta=f"{geral['roi']}% ROI")
+            col4.metric("Taxa de acerto", f"{geral['taxa_acerto']}%", f"{geral['vitorias']}/{geral['total_apostas']}")
+
+            st.markdown("---")
+            st.markdown("#### Por liga")
+            for liga_nome, dados in roi["por_liga"].items():
+                st.write(f"**{liga_nome}**: {dados['total_apostas']} apostas | "
+                         f"ROI {dados['roi']}% | Lucro R$ {dados['lucro']:.2f} | "
+                         f"Acerto {dados['taxa_acerto']}%")
+
+            st.markdown("#### Por categoria de mercado")
+            for cat_nome, dados in sorted(roi["por_categoria"].items(), key=lambda x: x[1]["roi"], reverse=True):
+                nome_exib = NOMES_CATEGORIAS.get(cat_nome, cat_nome)
+                cor_fn = st.success if dados["roi"] > 0 else st.error if dados["roi"] < 0 else st.info
+                cor_fn(f"{nome_exib}: {dados['total_apostas']} apostas | ROI {dados['roi']}% | "
+                       f"Lucro R$ {dados['lucro']:.2f}")
+
+            st.markdown("#### Por tipo de aposta")
+            for tipo_nome, dados in roi["por_tipo"].items():
+                st.write(f"**{tipo_nome.capitalize()}**: {dados['total_apostas']} apostas | "
+                         f"ROI {dados['roi']}% | Lucro R$ {dados['lucro']:.2f}")
