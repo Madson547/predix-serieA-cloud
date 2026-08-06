@@ -1,9 +1,14 @@
 # ==========================================================
-# Predix Série A — diagnostico.py
+# Predix Sports — diagnostico.py
 # Calcula a taxa de acerto histórica por categoria de mercado,
 # comparando as previsões salvas (mercados_json, gerado pelo
 # montar_mercados() do app.py) com o resultado real do jogo
-# (tabela "jogos" — gols_casa/gols_fora/status). Alimenta a aba Bingo.
+# (tabela "jogos"/"jogos_b" — gols_casa/gols_fora/status). Alimenta
+# a aba Bingo.
+#
+# PARAMETRIZADO POR LIGA (sufixo_liga="" Série A, "_b" Série B) —
+# cada liga tem sua própria taxa de acerto histórica, calculada
+# separadamente (times/mercados diferentes, não faz sentido misturar).
 #
 # LIMITAÇÃO CONHECIDA (arquitetura atual do coletor.py): só dá pra
 # diagnosticar categorias cujo resultado real vem direto do placar.
@@ -75,25 +80,28 @@ def _acertou(categoria, mercado, gols_casa, gols_fora):
     return None
 
 
-def calcular_taxas_acerto(min_amostras: int = 15) -> dict:
+def calcular_taxas_acerto(min_amostras: int = 15, sufixo_liga: str = "") -> dict:
     """
-    Varre todas as previsões salvas com mercados_json preenchido, cruza
-    com o resultado real do jogo correspondente (quando encerrado) e
-    devolve, por categoria diagnosticável:
+    Varre todas as previsões salvas (da liga indicada) com mercados_json
+    preenchido, cruza com o resultado real do jogo correspondente (quando
+    encerrado) e devolve, por categoria diagnosticável:
 
         {"acertos": int, "total": int, "taxa": float, "confiavel": bool}
 
     'confiavel' só vira True quando total >= min_amostras — enquanto
     isso a categoria não deve ser usada pra decidir o Bingo.
     """
+    tabela_previsoes = f"previsoes{sufixo_liga}"
+    tabela_jogos = f"jogos{sufixo_liga}"
+
     taxas = {cat: {"acertos": 0, "total": 0} for cat in CATEGORIAS_DIAGNOSTICAVEIS}
 
     try:
-        previsoes = supabase.table("previsoes").select(
+        previsoes = supabase.table(tabela_previsoes).select(
             "data,time_casa,time_fora,mercados_json"
         ).execute().data or []
     except Exception as e:
-        print(f"[ERRO] calcular_taxas_acerto (previsoes): {e}")
+        print(f"[ERRO] calcular_taxas_acerto{sufixo_liga} (previsoes): {e}")
         previsoes = []
 
     for p in previsoes:
@@ -101,11 +109,11 @@ def calcular_taxas_acerto(min_amostras: int = 15) -> dict:
             continue
 
         try:
-            jogo_real = supabase.table("jogos").select("gols_casa,gols_fora,status") \
+            jogo_real = supabase.table(tabela_jogos).select("gols_casa,gols_fora,status") \
                 .eq("casa_nome", p["time_casa"]).eq("fora_nome", p["time_fora"]) \
                 .eq("data", p["data"]).execute().data
         except Exception as e:
-            print(f"[ERRO] calcular_taxas_acerto (jogos): {e}")
+            print(f"[ERRO] calcular_taxas_acerto{sufixo_liga} (jogos): {e}")
             continue
 
         if not jogo_real or jogo_real[0].get("status") != "encerrado":
