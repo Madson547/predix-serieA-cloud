@@ -252,25 +252,72 @@ def montar_mercados(resultado, casa, fora):
     return mercados
 
 
-def gerar_multiplas(resultado, casa, fora):
-    """
-    Distribui os mercados disponíveis entre 5 múltiplas tentando:
-    1. Nunca colocar duas categorias de CONFIABILIDADE BAIXA na mesma
-       múltipla (evita que 1 jogo ruim de cartões/chutes no gol quebre
-       2+ pernas de uma vez — foi exatamente isso que aconteceu na
-       aposta perdida do Atlético-MG x Bahia em 21/07/2026).
-    2. Espalhar as categorias entre as 5 múltiplas em vez de reciclar
-       sempre os mesmos 3-4 "campeões" — cada categoria aparece no
-       máximo em 2 das 5 múltiplas.
+FALLBACK_CLASSIFICACAO_ESTATICA = {
+    # Usado só enquanto uma categoria ainda não tem as 15 amostras
+    # mínimas pra calcular_taxas_acerto() confiar nela — baseado na
+    # observação manual dos primeiros jogos desta conversa (ex: caso
+    # Atlético-MG x Bahia em 21/07/2026). Assim que a categoria virar
+    # "confiável" de verdade, a taxa REAL substitui isso automaticamente.
+    "resultado": "ALTA", "gols": "ALTA",
+    "escanteios": "MEDIA", "btts": "MEDIA", "chutes_casa": "MEDIA", "chutes_fora": "MEDIA",
+    "casa_marca": "MEDIA", "fora_marca": "MEDIA",
+    "cartoes": "BAIXA", "chutes_gol_casa": "BAIXA", "chutes_gol_fora": "BAIXA",
+    "faltas_casa": "MEDIA", "faltas_fora": "MEDIA",
+}
 
-    Classificação de confiabilidade (observada nos jogos analisados
-    nesta conversa, não é estatística formal — reavaliar com o
-    diagnostico_calibracao.py conforme mais jogos acumularem):
-      ALTA:  resultado, gols            (acerto consistente em vários jogos)
-      MÉDIA: escanteios, btts, chutes_casa, chutes_fora, casa_marca, fora_marca
-      BAIXA: cartoes, chutes_gol_casa, chutes_gol_fora  (erros repetidos)
+_RANK_TIER = {"ALTA": 3, "MEDIA": 2, "BAIXA": 1}
+
+
+@st.cache_data(ttl=600)
+def _taxas_cacheadas(sufixo_liga):
+    """calcular_taxas_acerto varre TODAS as previsões salvas — pode ficar
+    pesado se rodar em toda interação do usuário. Cacheado por 10 min."""
+    return calcular_taxas_acerto(min_amostras=15, sufixo_liga=sufixo_liga)
+
+
+def classificar_categorias_dinamico(sufixo_liga=""):
+    """
+    Classifica cada categoria em ALTA/MEDIA/BAIXA com base na taxa de
+    acerto REAL medida (calcular_taxas_acerto) quando já houver amostra
+    confiável (min. 15 avaliações); category ainda sem amostra suficiente
+    cai no fallback estático manual. Retorna (classificacao: dict,
+    taxas: dict) — taxas é devolvido junto pra exibir "(78% em 42 jogos)"
+    na interface.
+    """
+    taxas = _taxas_cacheadas(sufixo_liga)
+    classificacao = {}
+    for cat, fallback_tier in FALLBACK_CLASSIFICACAO_ESTATICA.items():
+        d = taxas.get(cat)
+        if d and d.get("confiavel"):
+            if d["taxa"] >= 65:
+                classificacao[cat] = "ALTA"
+            elif d["taxa"] >= 50:
+                classificacao[cat] = "MEDIA"
+            else:
+                classificacao[cat] = "BAIXA"
+        else:
+            classificacao[cat] = fallback_tier
+    return classificacao, taxas
+
+
+def gerar_multiplas(resultado, casa, fora, sufixo_liga=""):
+    """
+    Distribui os mercados disponíveis entre 5 múltiplas tentando nunca
+    colocar duas categorias de CONFIABILIDADE BAIXA na mesma múltipla —
+    evita que 1 jogo ruim de cartões/chutes no gol quebre 2+ pernas de
+    uma vez (foi o que aconteceu no Atlético-MG x Bahia em 21/07/2026).
+
+    A classificação ALTA/MÉDIA/BAIXA agora é DINÂMICA: usa a taxa de
+    acerto real medida por calcular_taxas_acerto() assim que a categoria
+    tiver amostra suficiente (min. 15 avaliações) pra essa liga — antes
+    disso, cai no fallback manual (mesma lista que já existia). Ou seja,
+    se "cartões" continuar errando muito na Série B, o próprio sistema
+    vai reclassificar essa categoria pra BAIXA sozinho, sem precisar
+    editar código de novo — e se ela virar confiável, sobe de tier
+    automaticamente também.
     """
     mercados = montar_mercados(resultado, casa, fora)
+    classificacao, taxas = classificar_categorias_dinamico(sufixo_liga)
 
     combos = [
         ("Múltipla 1 — Mais Segura", ["resultado", "gols", "escanteios"]),
@@ -282,7 +329,36 @@ def gerar_multiplas(resultado, casa, fora):
 
     multiplas = []
     for titulo, categorias in combos:
-        pernas = [mercados[c] for c in categorias if c in mercados]
+        categorias_disponiveis = [c for c in categorias if c in mercados]
+
+        # Se 2+ categorias desse combo estão classificadas BAIXA agora
+        # (dinamicamente), troca as excedentes por uma alternativa
+        # melhor disponível, evitando empilhar risco correlacionado.
+        baixas_no_combo = [c for c in categorias_disponiveis if classificacao.get(c) == "BAIXA"]
+        if len(baixas_no_combo) >= 2:
+            for excedente in baixas_no_combo[1:]:
+                candidatos = [
+                    c for c in mercados
+                    if c not in categorias_disponiveis and classificacao.get(c) != "BAIXA"
+                ]
+                if not candidatos:
+                    continue
+                candidatos.sort(
+                    key=lambda c: (_RANK_TIER.get(classificacao.get(c), 0), mercados[c]["prob"]),
+                    reverse=True,
+                )
+                substituto = candidatos[0]
+                categorias_disponiveis = [substituto if x == excedente else x for x in categorias_disponiveis]
+
+        pernas = []
+        for c in categorias_disponiveis:
+            perna = dict(mercados[c])
+            tier = classificacao.get(c, "?")
+            d = taxas.get(c, {})
+            perna["classificacao"] = tier
+            perna["amostra_info"] = f"{d['taxa']}% em {d['total']} jogos" if d.get("confiavel") else "amostra pequena"
+            pernas.append(perna)
+
         if not pernas:
             continue
         prob_combinada = 1.0
@@ -354,7 +430,7 @@ with aba_painel:
 
                 if st.button("💾 Salvar previsão", key=f"salvar_{jogo['casa_nome']}_{jogo['fora_nome']}_{jogo.get('data','')}"):
                     mercados_pra_salvar = montar_mercados(resultado, jogo['casa_nome'], jogo['fora_nome'])
-                    multiplas_pra_salvar = gerar_multiplas(resultado, jogo['casa_nome'], jogo['fora_nome'])
+                    multiplas_pra_salvar = gerar_multiplas(resultado, jogo['casa_nome'], jogo['fora_nome'], sufixo_liga=SUFIXO)
                     if salvar_previsao(resultado, jogo['casa_nome'], jogo['fora_nome'], jogo.get('data'), top_3, multiplas_pra_salvar, mercados_pra_salvar, sufixo_liga=SUFIXO):
                         st.success("Previsão + mercados + múltiplas salvos! Confira depois nas abas 🎯 Bingo e 📈 Medidor de Desempenho.")
                     else:
@@ -547,12 +623,15 @@ with aba_multiplas:
         st.markdown("---")
 
         if resultado:
-            multiplas = gerar_multiplas(resultado, jogo['casa_nome'], jogo['fora_nome'])
+            multiplas = gerar_multiplas(resultado, jogo['casa_nome'], jogo['fora_nome'], sufixo_liga=SUFIXO)
             cores = ["#1b4332", "#123a4a", "#4a3b1b", "#4a1919"]
+            emoji_tier = {"ALTA": "🟢", "MEDIA": "🟡", "BAIXA": "🔴"}
             for i, m in enumerate(multiplas):
                 cor = cores[i % len(cores)]
                 pernas_html = "".join(
-                    f'<div style="padding:3px 0; color:#ffffff;">✅ {p["nome"]} <span style="opacity:0.85;">({p["prob"]:.1f}%)</span></div>'
+                    f'<div style="padding:3px 0; color:#ffffff;">'
+                    f'{emoji_tier.get(p.get("classificacao"), "⚪")} {p["nome"]} '
+                    f'<span style="opacity:0.85;">({p["prob"]:.1f}% | {p.get("amostra_info","")})</span></div>'
                     for p in m["pernas"]
                 )
                 odd_html = f" &nbsp;|&nbsp; Odd Justa: <b>{m['odd_justa']}</b>" if m["odd_justa"] else ""
@@ -565,6 +644,8 @@ with aba_multiplas:
                   </div>
                 </div>
                 """, unsafe_allow_html=True)
+            st.caption("🟢 confiabilidade alta · 🟡 média · 🔴 baixa — calculado com base na taxa de acerto real "
+                       "quando já há amostra suficiente (mín. 15 jogos avaliados); senão usa a classificação manual inicial.")
         else:
             st.warning("Análise não disponível — time não encontrado no banco.")
 
