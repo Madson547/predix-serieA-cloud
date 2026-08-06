@@ -448,39 +448,49 @@ with aba_bingo:
             st.info(f"📊 Probabilidade combinada do Bingo: **{prob_combinada}%**")
             st.markdown("---")
 
-with aba_multiplas:
-    st.markdown("## 🎰 Sugestões de Múltiplas")
+==========================================================
+DIFF — versão corrigida pra bater com o app.py real (usa
+p['nome']/p['prob']/m['pernas']/m['titulo']/m['odd_justa'])
+==========================================================
 
-    if not partidas:
-        st.info("Sem jogos na janela atual — nada pra gerar múltiplas ainda. Confira a aba Painel Analítico.")
-    else:
-        st.caption(f"Confronto: **{jogo['casa_nome']} x {jogo['fora_nome']}**")
-        st.caption(
-            "⚠️ A probabilidade combinada assume que os mercados são independentes entre si — "
-            "na prática alguns se correlacionam (ex: Mais de 2.5 Gols tende a andar junto com "
-            "Ambas Marcam), então trate como referência, não como certeza matemática exata."
-        )
-        st.markdown("---")
+TROCAR (a linha do pernas_html):
 
-        if resultado:
-            multiplas = gerar_multiplas(resultado, jogo['casa_nome'], jogo['fora_nome'])
-            cores = ["#1b4332", "#123a4a", "#4a3b1b", "#4a1919"]
-            for i, m in enumerate(multiplas):
-                cor = cores[i % len(cores)]
-                pernas_html = "".join(
-                    f'<div style="padding:3px 0;">✅ {p["nome"]} <span style="opacity:0.7;">({p["prob"]:.1f}%)</span></div>'
-                    for p in m["pernas"]
-                )
-                odd_html = f" &nbsp;|&nbsp; Odd Justa: <b>{m['odd_justa']}</b>" if m["odd_justa"] else ""
-                st.markdown(f"""
-                <div style="background:{cor}; border-radius:10px; padding:16px 20px; margin-bottom:14px;">
-                  <div style="font-weight:bold; font-size:17px; margin-bottom:10px;">{m['titulo']}</div>
-                  {pernas_html}
-                  <div style="margin-top:12px; font-size:15px;">
-                    📊 Probabilidade de bater: <b>{m['prob_combinada']}%</b>{odd_html}
-                  </div>
-                </div>
-                """, unsafe_allow_html=True)
+            pernas_html = "".join(
+                f'<div style="padding:3px 0;">✅ {p["nome"]} <span style="opacity:0.7;">({p["prob"]:.1f}%)</span></div>'
+                for p in m["pernas"]
+            )
+
+POR:
+
+            pernas_html = "".join(
+                f'<div style="padding:3px 0; color:#ffffff;">✅ {p["nome"]} <span style="opacity:0.85;">({p["prob"]:.1f}%)</span></div>'
+                for p in m["pernas"]
+            )
+
+
+TROCAR (o bloco st.markdown logo abaixo):
+
+            st.markdown(f"""
+            <div style="background:{cor}; border-radius:10px; padding:16px 20px; margin-bottom:14px;">
+              <div style="font-weight:bold; font-size:17px; margin-bottom:10px;">{m['titulo']}</div>
+              {pernas_html}
+              <div style="margin-top:12px; font-size:15px;">
+                📊 Probabilidade de bater: <b>{m['prob_combinada']}%</b>{odd_html}
+              </div>
+            </div>
+            """, unsafe_allow_html=True)
+
+POR:
+
+            st.markdown(f"""
+            <div style="background:{cor}; border-radius:10px; padding:16px 20px; margin-bottom:14px; color:#ffffff;">
+              <div style="font-weight:bold; font-size:17px; margin-bottom:10px; color:#ffffff;">{m['titulo']}</div>
+              {pernas_html}
+              <div style="margin-top:12px; font-size:15px; color:#ffffff;">
+                📊 Probabilidade de bater: <b>{m['prob_combinada']}%</b>{odd_html}
+              </div>
+            </div>
+            """, unsafe_allow_html=True)
         else:
             st.warning("Análise não disponível — time não encontrado no banco.")
 
