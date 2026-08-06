@@ -4,7 +4,8 @@ import json
 from datetime import date
 from database import supabase
 from poisson import MotorPoisson
-from qualitativo import calcular_fator_qualitativo, buscar_noticias_recentes, buscar_ajuste_manual
+from qualitativo import calcular_fator_qualitativo, buscar_noticias_recentes, buscar_ajuste_manual, calcular_forma_recente
+from ia_qualitativa import analisar_texto_qualitativo, salvar_ajuste_manual
 from previsoes import salvar_previsao, buscar_previsoes, buscar_previsoes_do_dia
 from diagnostico import calcular_taxas_acerto, melhores_categorias, NOMES_CATEGORIAS
 
@@ -75,8 +76,11 @@ def analisar_confronto(casa, fora, data_jogo=None):
     ajuste_manual_casa = ajuste.get("ajuste_manual_casa") if ajuste else None
     ajuste_manual_fora = ajuste.get("ajuste_manual_fora") if ajuste else None
 
-    fq_casa = calcular_fator_qualitativo(casa, tc, noticias, ajuste_manual_casa)
-    fq_fora = calcular_fator_qualitativo(fora, tf, noticias, ajuste_manual_fora)
+    forma_casa = calcular_forma_recente(casa, data_jogo)
+    forma_fora = calcular_forma_recente(fora, data_jogo)
+
+    fq_casa = calcular_fator_qualitativo(casa, tc, noticias, ajuste_manual_casa, forma_casa)
+    fq_fora = calcular_fator_qualitativo(fora, tf, noticias, ajuste_manual_fora, forma_fora)
 
     resultado = motor.calcular(
         time_casa=casa, time_fora=fora,
@@ -328,6 +332,57 @@ with aba_painel:
                     else:
                         st.error("Não consegui salvar — confira o log do Streamlit Cloud.")
 
+                with st.expander("🤖 Analisar notícia/escalação com IA (opcional)"):
+                    st.caption(
+                        "Cole abaixo o texto de uma notícia, escalação ou resumo de site "
+                        "esportivo sobre este confronto. A IA sugere um ajuste qualitativo — "
+                        "confira antes de salvar, o valor só entra pra valer depois que você "
+                        "clicar em salvar aqui embaixo."
+                    )
+                    chave_ia = f"texto_ia_{jogo['casa_nome']}_{jogo['fora_nome']}_{jogo.get('data','')}"
+                    texto_ia = st.text_area(
+                        "Cole aqui o texto da notícia/escalação",
+                        key=chave_ia, height=100,
+                    )
+                    if st.button("🤖 Analisar com IA", key=f"btn_ia_{chave_ia}"):
+                        try:
+                            with st.spinner("Analisando com IA..."):
+                                sugestao = analisar_texto_qualitativo(
+                                    texto_ia, jogo['casa_nome'], jogo['fora_nome']
+                                )
+                            st.session_state[f"ajuste_casa_{chave_ia}"] = sugestao["ajuste_casa"]
+                            st.session_state[f"ajuste_fora_{chave_ia}"] = sugestao["ajuste_fora"]
+                            st.session_state[f"obs_{chave_ia}"] = sugestao["resumo_observacoes"]
+                            st.success(
+                                f"✅ Sugestão: {jogo['casa_nome']} = {sugestao['ajuste_casa']} | "
+                                f"{jogo['fora_nome']} = {sugestao['ajuste_fora']} "
+                                f"(confiança da IA: {sugestao['confianca']}). "
+                                f"Contexto: {sugestao['contexto_especial'] or '—'}"
+                            )
+                        except Exception as e:
+                            st.error(f"Erro ao analisar com IA: {e}")
+
+                    ajuste_casa_ia = st.number_input(
+                        f"Ajuste {jogo['casa_nome']}", min_value=0.80, max_value=1.20, step=0.01,
+                        key=f"ajuste_casa_{chave_ia}", value=st.session_state.get(f"ajuste_casa_{chave_ia}", 1.0)
+                    )
+                    ajuste_fora_ia = st.number_input(
+                        f"Ajuste {jogo['fora_nome']}", min_value=0.80, max_value=1.20, step=0.01,
+                        key=f"ajuste_fora_{chave_ia}", value=st.session_state.get(f"ajuste_fora_{chave_ia}", 1.0)
+                    )
+                    obs_ia = st.text_input(
+                        "Observações", key=f"obs_{chave_ia}",
+                        value=st.session_state.get(f"obs_{chave_ia}", "")
+                    )
+                    if st.button("💾 Salvar ajuste manual (via IA)", key=f"btn_salvar_ia_{chave_ia}"):
+                        if salvar_ajuste_manual(
+                            jogo['casa_nome'], jogo['fora_nome'], jogo.get('data'),
+                            ajuste_casa_ia, ajuste_fora_ia, obs_ia
+                        ):
+                            st.success("✅ Ajuste salvo em ajustes_qualitativos! Recarregue a página pra ver refletido na análise.")
+                        else:
+                            st.error("Não consegui salvar — confira o log do Streamlit Cloud.")
+
                 st.markdown("---")
                 st.markdown("### 🎯 Todas as Probabilidades")
                 st.info(f"🟦 Vitória {jogo['casa_nome']}: {resultado.prob_casa}%")
@@ -448,49 +503,40 @@ with aba_bingo:
             st.info(f"📊 Probabilidade combinada do Bingo: **{prob_combinada}%**")
             st.markdown("---")
 
-==========================================================
-DIFF — versão corrigida pra bater com o app.py real (usa
-p['nome']/p['prob']/m['pernas']/m['titulo']/m['odd_justa'])
-==========================================================
 
-TROCAR (a linha do pernas_html):
+with aba_multiplas:
+    st.markdown("## 🎰 Sugestões de Múltiplas")
 
-            pernas_html = "".join(
-                f'<div style="padding:3px 0;">✅ {p["nome"]} <span style="opacity:0.7;">({p["prob"]:.1f}%)</span></div>'
-                for p in m["pernas"]
-            )
+    if not partidas:
+        st.info("Sem jogos na janela atual — nada pra gerar múltiplas ainda. Confira a aba Painel Analítico.")
+    else:
+        st.caption(f"Confronto: **{jogo['casa_nome']}** x **{jogo['fora_nome']}**")
+        st.caption(
+            "⚠️ A probabilidade combinada assume que os mercados são independentes entre si — "
+            "na prática alguns se correlacionam (ex: Mais de 2.5 Gols tende a andar junto com "
+            "Ambas Marcam), então trate como referência, não como certeza matemática exata."
+        )
+        st.markdown("---")
 
-POR:
-
-            pernas_html = "".join(
-                f'<div style="padding:3px 0; color:#ffffff;">✅ {p["nome"]} <span style="opacity:0.85;">({p["prob"]:.1f}%)</span></div>'
-                for p in m["pernas"]
-            )
-
-
-TROCAR (o bloco st.markdown logo abaixo):
-
-            st.markdown(f"""
-            <div style="background:{cor}; border-radius:10px; padding:16px 20px; margin-bottom:14px;">
-              <div style="font-weight:bold; font-size:17px; margin-bottom:10px;">{m['titulo']}</div>
-              {pernas_html}
-              <div style="margin-top:12px; font-size:15px;">
-                📊 Probabilidade de bater: <b>{m['prob_combinada']}%</b>{odd_html}
-              </div>
-            </div>
-            """, unsafe_allow_html=True)
-
-POR:
-
-            st.markdown(f"""
-            <div style="background:{cor}; border-radius:10px; padding:16px 20px; margin-bottom:14px; color:#ffffff;">
-              <div style="font-weight:bold; font-size:17px; margin-bottom:10px; color:#ffffff;">{m['titulo']}</div>
-              {pernas_html}
-              <div style="margin-top:12px; font-size:15px; color:#ffffff;">
-                📊 Probabilidade de bater: <b>{m['prob_combinada']}%</b>{odd_html}
-              </div>
-            </div>
-            """, unsafe_allow_html=True)
+        if resultado:
+            multiplas = gerar_multiplas(resultado, jogo['casa_nome'], jogo['fora_nome'])
+            cores = ["#1b4332", "#123a4a", "#4a3b1b", "#4a1919"]
+            for i, m in enumerate(multiplas):
+                cor = cores[i % len(cores)]
+                pernas_html = "".join(
+                    f'<div style="padding:3px 0; color:#ffffff;">✅ {p["nome"]} <span style="opacity:0.85;">({p["prob"]:.1f}%)</span></div>'
+                    for p in m["pernas"]
+                )
+                odd_html = f" &nbsp;|&nbsp; Odd Justa: <b>{m['odd_justa']}</b>" if m["odd_justa"] else ""
+                st.markdown(f"""
+                <div style="background:{cor}; border-radius:10px; padding:16px 20px; margin-bottom:14px; color:#ffffff;">
+                  <div style="font-weight:bold; font-size:17px; margin-bottom:10px; color:#ffffff;">{m['titulo']}</div>
+                  {pernas_html}
+                  <div style="margin-top:12px; font-size:15px; color:#ffffff;">
+                    📊 Probabilidade de bater: <b>{m['prob_combinada']}%</b>{odd_html}
+                  </div>
+                </div>
+                """, unsafe_allow_html=True)
         else:
             st.warning("Análise não disponível — time não encontrado no banco.")
 
