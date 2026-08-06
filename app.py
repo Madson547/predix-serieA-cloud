@@ -9,30 +9,58 @@ from ia_qualitativa import analisar_texto_qualitativo, salvar_ajuste_manual
 from previsoes import salvar_previsao, buscar_previsoes, buscar_previsoes_do_dia
 from diagnostico import calcular_taxas_acerto, melhores_categorias, NOMES_CATEGORIAS
 
-st.set_page_config(layout="wide", page_title="Predix Sports Série A", page_icon="🇧🇷")
+st.set_page_config(layout="wide", page_title="Predix Sports", page_icon="🇧🇷")
+
+# ==========================================================
+# SELETOR DE LIGA — Série A e Série B rodando no mesmo app,
+# mesmo repositório, mesmo Supabase. Cada liga tem seu próprio
+# conjunto de tabelas (jogos/jogos_b, times/times_b, previsoes/
+# previsoes_b, ajustes_qualitativos/ajustes_qualitativos_b,
+# noticias/noticias_b) — sufixo_liga escolhe qual conjunto usar
+# em toda chamada ao Supabase daqui pra baixo.
+# ==========================================================
+LIGAS = {
+    "🇧🇷 Série A": {
+        "sufixo": "",
+        "nome_exibicao": "Série A",
+        "campeonato_id": 3,
+        "legenda_tabela": "🟩 Classificação para Libertadores (1º–4º) · 🟥 Zona de rebaixamento à Série B (17º–20º)",
+    },
+    "🇧🇷 Série B": {
+        "sufixo": "_b",
+        "nome_exibicao": "Série B",
+        "campeonato_id": 4,
+        "legenda_tabela": "🟩 Acesso à Série A (1º–4º) · 🟥 Zona de rebaixamento à Série C (17º–20º)",
+    },
+}
+
+liga_selecionada = st.radio(
+    "Liga:", list(LIGAS.keys()), horizontal=True, label_visibility="collapsed"
+)
+liga = LIGAS[liga_selecionada]
+SUFIXO = liga["sufixo"]
 
 motor = MotorPoisson()
 MEDALHAS = ["🥇", "🥈", "🥉"]
 
 
 @st.cache_data(ttl=300)
-def carregar_partidas():
-    hoje = date.today().isoformat()
+def carregar_partidas(sufixo_liga):
     resp = (
-        supabase.table("jogos").select("*")
+        supabase.table(f"jogos{sufixo_liga}").select("*")
         .neq("status", "encerrado")
         .order("data").execute()
     )
     return resp.data
 
 @st.cache_data(ttl=300)
-def carregar_tabela():
-    resp = supabase.table("times").select("*").order("pts", desc=True).execute()
+def carregar_tabela(sufixo_liga):
+    resp = supabase.table(f"times{sufixo_liga}").select("*").order("pts", desc=True).execute()
     return resp.data
 
 
-def buscar_time(nome):
-    resp = supabase.table("times").select("*").eq("nome", nome).execute().data
+def buscar_time(nome, sufixo_liga):
+    resp = supabase.table(f"times{sufixo_liga}").select("*").eq("nome", nome).execute().data
     return resp[0] if resp else None
 
 
@@ -64,20 +92,20 @@ def _valor_ou_padrao(dados_time, chave, padrao):
     return valor if valor is not None else padrao
 
 
-def analisar_confronto(casa, fora, data_jogo=None):
-    tc = buscar_time(casa)
-    tf = buscar_time(fora)
+def analisar_confronto(casa, fora, data_jogo=None, sufixo_liga=""):
+    tc = buscar_time(casa, sufixo_liga)
+    tf = buscar_time(fora, sufixo_liga)
     if not tc or not tf:
         return None
 
-    noticias = buscar_noticias_recentes(50)
+    noticias = buscar_noticias_recentes(50, sufixo_liga)
 
-    ajuste = buscar_ajuste_manual(casa, fora, data_jogo)
+    ajuste = buscar_ajuste_manual(casa, fora, data_jogo, sufixo_liga)
     ajuste_manual_casa = ajuste.get("ajuste_manual_casa") if ajuste else None
     ajuste_manual_fora = ajuste.get("ajuste_manual_fora") if ajuste else None
 
-    forma_casa = calcular_forma_recente(casa, data_jogo)
-    forma_fora = calcular_forma_recente(fora, data_jogo)
+    forma_casa = calcular_forma_recente(casa, data_jogo, sufixo_liga)
+    forma_fora = calcular_forma_recente(fora, data_jogo, sufixo_liga)
 
     fq_casa = calcular_fator_qualitativo(casa, tc, noticias, ajuste_manual_casa, forma_casa)
     fq_fora = calcular_fator_qualitativo(fora, tf, noticias, ajuste_manual_fora, forma_fora)
@@ -281,8 +309,8 @@ def colorir_tabela(row):
     return [''] * len(row)
 
 
-partidas = carregar_partidas()
-tabela = carregar_tabela()
+partidas = carregar_partidas(SUFIXO)
+tabela = carregar_tabela(SUFIXO)
 
 lista_confrontos = [f"{j['casa_nome']} x {j['fora_nome']}" for j in partidas] if partidas else []
 
@@ -295,7 +323,7 @@ aba_painel, aba_multiplas, aba_bingo, aba_tabela, aba_performance = st.tabs([
 ])
 
 with aba_painel:
-    st.markdown("## ⚽ Predix Sports — Análise Quantitativa Série A 2026")
+    st.markdown(f"## ⚽ Predix Sports — Análise Quantitativa {liga['nome_exibicao']} 2026")
 
     if not partidas:
         st.warning("⚠️ Nenhum jogo encontrado na janela de datas atual. Verifique se o robô de coleta rodou recentemente.")
@@ -308,7 +336,7 @@ with aba_painel:
             confronto_sel = st.selectbox("Escolha a Partida:", lista_confrontos)
             jogo = [j for j in partidas if f"{j['casa_nome']} x {j['fora_nome']}" == confronto_sel][0]
 
-            resultado = analisar_confronto(jogo['casa_nome'], jogo['fora_nome'], jogo.get('data'))
+            resultado = analisar_confronto(jogo['casa_nome'], jogo['fora_nome'], jogo.get('data'), SUFIXO)
 
             st.markdown(f"🗓️ **Data:** {jogo.get('data','')} | 🕒 **Hora:** {jogo.get('hora','')} | **Status:** {jogo.get('status_desc','')}")
             st.markdown("---")
@@ -327,7 +355,7 @@ with aba_painel:
                 if st.button("💾 Salvar previsão", key=f"salvar_{jogo['casa_nome']}_{jogo['fora_nome']}_{jogo.get('data','')}"):
                     mercados_pra_salvar = montar_mercados(resultado, jogo['casa_nome'], jogo['fora_nome'])
                     multiplas_pra_salvar = gerar_multiplas(resultado, jogo['casa_nome'], jogo['fora_nome'])
-                    if salvar_previsao(resultado, jogo['casa_nome'], jogo['fora_nome'], jogo.get('data'), top_3, multiplas_pra_salvar, mercados_pra_salvar):
+                    if salvar_previsao(resultado, jogo['casa_nome'], jogo['fora_nome'], jogo.get('data'), top_3, multiplas_pra_salvar, mercados_pra_salvar, sufixo_liga=SUFIXO):
                         st.success("Previsão + mercados + múltiplas salvos! Confira depois nas abas 🎯 Bingo e 📈 Medidor de Desempenho.")
                     else:
                         st.error("Não consegui salvar — confira o log do Streamlit Cloud.")
@@ -377,9 +405,9 @@ with aba_painel:
                     if st.button("💾 Salvar ajuste manual (via IA)", key=f"btn_salvar_ia_{chave_ia}"):
                         if salvar_ajuste_manual(
                             jogo['casa_nome'], jogo['fora_nome'], jogo.get('data'),
-                            ajuste_casa_ia, ajuste_fora_ia, obs_ia
+                            ajuste_casa_ia, ajuste_fora_ia, obs_ia, sufixo_liga=SUFIXO
                         ):
-                            st.success("✅ Ajuste salvo em ajustes_qualitativos! Recarregue a página pra ver refletido na análise.")
+                            st.success(f"✅ Ajuste salvo em ajustes_qualitativos{SUFIXO}! Recarregue a página pra ver refletido na análise.")
                         else:
                             st.error("Não consegui salvar — confira o log do Streamlit Cloud.")
 
@@ -422,12 +450,12 @@ with aba_bingo:
     )
 
     hoje = date.today().isoformat()
-    previsoes_hoje = buscar_previsoes_do_dia(hoje)
+    previsoes_hoje = buscar_previsoes_do_dia(hoje, sufixo_liga=SUFIXO)
 
     if not previsoes_hoje:
         st.info("Nenhuma previsão salva ainda hoje. Analise os jogos na aba 📊 Painel Analítico e clique em '💾 Salvar previsão' — o Bingo cobre todos os jogos salvos no dia.")
     else:
-        taxas = calcular_taxas_acerto(min_amostras=15)
+        taxas = calcular_taxas_acerto(min_amostras=15, sufixo_liga=SUFIXO)
         top_categorias = melhores_categorias(taxas, n=2)
 
         with st.expander("📐 Taxas de acerto histórico por categoria (usadas no Bingo)"):
@@ -541,8 +569,8 @@ with aba_multiplas:
             st.warning("Análise não disponível — time não encontrado no banco.")
 
 with aba_tabela:
-    st.subheader("🏆 Classificação — Brasileirão Série A 2026")
-    st.caption("🟩 Classificação para Libertadores (1º–4º) · 🟥 Zona de rebaixamento à Série B (17º–20º)")
+    st.subheader(f"🏆 Classificação — Brasileirão {liga['nome_exibicao']} 2026")
+    st.caption(liga["legenda_tabela"])
     if tabela:
         df = pd.DataFrame(tabela)
         colunas = ["posicao", "nome", "pts", "j", "v", "e", "d", "gm", "gc", "sg"]
@@ -558,7 +586,7 @@ with aba_performance:
     st.caption("Busque previsões salvas pra comparar com o resultado real depois do jogo.")
 
     termo_busca = st.text_input("Buscar por time (ou deixe vazio pra ver as mais recentes):", "")
-    previsoes_salvas = buscar_previsoes(termo_busca)
+    previsoes_salvas = buscar_previsoes(termo_busca, sufixo_liga=SUFIXO)
 
     if not previsoes_salvas:
         st.info("Nenhuma previsão salva ainda. Use o botão '💾 Salvar previsão' na aba Painel Analítico.")
@@ -578,7 +606,7 @@ with aba_performance:
                         pernas_txt = " + ".join(f"{leg['nome']} ({leg['prob']:.1f}%)" for leg in m["pernas"])
                         st.caption(f"{m['titulo']}: {pernas_txt} → combinada {m['prob_combinada']}%")
 
-                jogo_real = supabase.table("jogos").select("gols_casa,gols_fora,status") \
+                jogo_real = supabase.table(f"jogos{SUFIXO}").select("gols_casa,gols_fora,status") \
                     .eq("casa_nome", p['time_casa']).eq("fora_nome", p['time_fora']) \
                     .eq("data", p['data']).execute().data
                 if jogo_real and jogo_real[0].get("status") == "encerrado":
