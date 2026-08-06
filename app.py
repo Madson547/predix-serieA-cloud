@@ -333,7 +333,7 @@ with aba_painel:
 
         with col1:
             st.markdown("### 🎛️ Selecione o Confronto")
-            confronto_sel = st.selectbox("Escolha a Partida:", lista_confrontos)
+            confronto_sel = st.selectbox("Escolha a Partida:", lista_confrontos, key=f"confronto_sel{SUFIXO}")
             jogo = [j for j in partidas if f"{j['casa_nome']} x {j['fora_nome']}" == confronto_sel][0]
 
             resultado = analisar_confronto(jogo['casa_nome'], jogo['fora_nome'], jogo.get('data'), SUFIXO)
