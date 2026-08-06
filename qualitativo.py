@@ -70,9 +70,9 @@ def calcular_eficiencia_conversao(dados_time: dict | None) -> float | None:
 # SENTIMENTO DE NOTÍCIAS
 # ==========================================================
 
-def buscar_noticias_recentes(limite: int = 30) -> list:
+def buscar_noticias_recentes(limite: int = 30, sufixo_liga: str = "") -> list:
     try:
-        resp = supabase.table("noticias").select("texto") \
+        resp = supabase.table(f"noticias{sufixo_liga}").select("texto") \
             .order("data_atualizacao", desc=True).limit(limite).execute()
         return [r["texto"] for r in (resp.data or []) if r.get("texto")]
     except Exception as e:
@@ -110,7 +110,7 @@ def calcular_sentimento_time(nome: str, noticias: list) -> float:
 # FORMA RECENTE (histórico real de jogos, não estimativa)
 # ==========================================================
 
-def calcular_forma_recente(nome_time: str, data_referencia: str | None, n: int = 5) -> str | None:
+def calcular_forma_recente(nome_time: str, data_referencia: str | None, sufixo_liga: str = "", n: int = 5) -> str | None:
     """
     Calcula a forma recente de um time com base no aproveitamento de
     pontos nos últimos N jogos ENCERRADOS (histórico real da tabela
@@ -129,7 +129,7 @@ def calcular_forma_recente(nome_time: str, data_referencia: str | None, n: int =
 
     try:
         resp = (
-            supabase.table("jogos")
+            supabase.table(f"jogos{sufixo_liga}")
             .select("casa_nome, fora_nome, gols_casa, gols_fora, data")
             .or_(f"casa_nome.eq.{nome_time},fora_nome.eq.{nome_time}")
             .eq("status", "encerrado")
@@ -176,11 +176,12 @@ def calcular_forma_recente(nome_time: str, data_referencia: str | None, n: int =
 # AJUSTE QUALITATIVO MANUAL (planilha -> tabela ajustes_qualitativos)
 # ==========================================================
 
-def buscar_ajuste_manual(time_casa: str, time_fora: str, data_jogo: str | None = None) -> dict | None:
+def buscar_ajuste_manual(time_casa: str, time_fora: str, data_jogo: str | None = None, sufixo_liga: str = "") -> dict | None:
     """
     Busca o registro de ajuste qualitativo manual (preenchido na planilha
-    predix_dados_qualitativos.xlsx e importado via importar_qualitativos.py)
-    para o confronto exato entre time_casa e time_fora.
+    predix_dados_qualitativos.xlsx e importado via importar_qualitativos.py,
+    ou salvo direto pela IA via ia_qualitativa.py) para o confronto exato
+    entre time_casa e time_fora.
 
     Casamento por nome (case-insensitive) + data quando informada. Sem data,
     ou se não achar pela data exata, cai para o registro mais recente
@@ -188,7 +189,7 @@ def buscar_ajuste_manual(time_casa: str, time_fora: str, data_jogo: str | None =
     data no Supabase não bateu 100% com a da tabela 'jogos'.
     """
     try:
-        base = supabase.table("ajustes_qualitativos").select("*") \
+        base = supabase.table(f"ajustes_qualitativos{sufixo_liga}").select("*") \
             .ilike("time_casa", time_casa).ilike("time_fora", time_fora)
 
         if data_jogo:
