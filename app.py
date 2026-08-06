@@ -252,17 +252,24 @@ def montar_mercados(resultado, casa, fora):
     return mercados
 
 
-FALLBACK_CLASSIFICACAO_ESTATICA = {
-    # Usado só enquanto uma categoria ainda não tem as 15 amostras
-    # mínimas pra calcular_taxas_acerto() confiar nela — baseado na
-    # observação manual dos primeiros jogos desta conversa (ex: caso
-    # Atlético-MG x Bahia em 21/07/2026). Assim que a categoria virar
-    # "confiável" de verdade, a taxa REAL substitui isso automaticamente.
+FALLBACK_CLASSIFICACAO_ESTATICA_SERIE_A = {
+    # Baseado na observação manual dos primeiros jogos desta conversa
+    # (ex: caso Atlético-MG x Bahia em 21/07/2026) — só vale pra Série A,
+    # não deve contaminar a Série B, que tem padrão de jogo próprio.
     "resultado": "ALTA", "gols": "ALTA",
     "escanteios": "MEDIA", "btts": "MEDIA", "chutes_casa": "MEDIA", "chutes_fora": "MEDIA",
     "casa_marca": "MEDIA", "fora_marca": "MEDIA",
     "cartoes": "BAIXA", "chutes_gol_casa": "BAIXA", "chutes_gol_fora": "BAIXA",
     "faltas_casa": "MEDIA", "faltas_fora": "MEDIA",
+}
+
+FALLBACK_CLASSIFICACAO_ESTATICA_SERIE_B = {
+    # Neutro de propósito — a Série B não herda o viés observado na
+    # Série A (não é a mesma liga, nem o mesmo padrão de jogo). Some
+    # categorias podem ser boas ou ruins de forma completamente
+    # diferente da A; melhor não presumir. Some ~15 jogos avaliados
+    # (pouco mais de 1 rodada) já bastam pra virar taxa real.
+    cat: "MEDIA" for cat in FALLBACK_CLASSIFICACAO_ESTATICA_SERIE_A
 }
 
 _RANK_TIER = {"ALTA": 3, "MEDIA": 2, "BAIXA": 1}
@@ -285,8 +292,9 @@ def classificar_categorias_dinamico(sufixo_liga=""):
     na interface.
     """
     taxas = _taxas_cacheadas(sufixo_liga)
+    fallback = FALLBACK_CLASSIFICACAO_ESTATICA_SERIE_B if sufixo_liga == "_b" else FALLBACK_CLASSIFICACAO_ESTATICA_SERIE_A
     classificacao = {}
-    for cat, fallback_tier in FALLBACK_CLASSIFICACAO_ESTATICA.items():
+    for cat, fallback_tier in fallback.items():
         d = taxas.get(cat)
         if d and d.get("confiavel"):
             if d["taxa"] >= 65:
