@@ -85,6 +85,32 @@ def excluir_aposta(aposta_id: int) -> bool:
         return False
 
 
+def buscar_evolucao_lucro(liga: str = None) -> list:
+    """
+    Retorna a série histórica de lucro/prejuízo ACUMULADO ao longo do
+    tempo, ordenada por data da aposta — pra plotar a curva de evolução
+    (não é foto do momento, é tendência). Só considera apostas já
+    resolvidas (ganhou/perdeu).
+    """
+    try:
+        query = supabase.table("apostas").select("data_aposta,retorno,stake") \
+            .in_("status", ["ganhou", "perdeu"]).order("data_aposta")
+        if liga:
+            query = query.eq("liga", liga)
+        apostas = query.execute().data or []
+    except Exception as e:
+        print(f"[ERRO] buscar_evolucao_lucro: {e}")
+        apostas = []
+
+    evolucao = []
+    acumulado = 0.0
+    for a in apostas:
+        lucro_aposta = (a["retorno"] or 0) - a["stake"]
+        acumulado += lucro_aposta
+        evolucao.append({"data": a["data_aposta"], "lucro_acumulado": round(acumulado, 2)})
+    return evolucao
+
+
 def calcular_roi(liga: str = None) -> dict:
     """
     Calcula ROI agregado só das apostas já resolvidas (ganhou/perdeu) —
