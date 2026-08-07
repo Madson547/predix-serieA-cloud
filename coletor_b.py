@@ -466,6 +466,10 @@ def buscar_stats_por_time(rodadas: list[int] | None = None) -> dict:
 
         est_data = _get(f"/partidas/{pid}/estatisticas")
         time.sleep(0.3)
+        # DEBUG TEMPORÁRIO — remover depois de confirmar o payload
+        if pid in (3269, 3281):
+            import json
+            print(f"[DEBUG-FALTAS] fixture_id={pid} payload cru:\n{json.dumps(est_data, indent=2, ensure_ascii=False)}")
 
         # CORREÇÃO 1: nível "estatisticas" estava faltando na leitura.
         # Estrutura real: {"data": {"estatisticas": {"mandante": {...}, "visitante": {...}}}}
