@@ -3,7 +3,7 @@ name: Coletor Diario - Predix Serie A
 on:
   schedule:
     - cron: '0 11 * * *'   # 08:00 horario de Brasilia (UTC-3)
-    - cron: '0 23 * * *'   # 20:00 horario de Brasilia
+    - cron: '0 2 * * *'    # 23:00 horario de Brasilia (02:00 UTC do dia seguinte)
   workflow_dispatch:        # permite rodar manualmente pelo botao "Run workflow" no GitHub
 
 jobs:
