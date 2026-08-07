@@ -3,7 +3,7 @@ name: Coletor Diario B - Predix Serie B
 on:
   schedule:
     - cron: '5 11 * * *'   # 08:05 horario de Brasilia (UTC-3) — 5 min depois do coletor da Série A, pra não competir pela cota da API ao mesmo tempo
-    - cron: '5 23 * * *'   # 20:05 horario de Brasilia
+    - cron: '5 2 * * *'    # 23:05 horario de Brasilia (02:05 UTC do dia seguinte) — mantém o offset de 5min do coletor A
   workflow_dispatch:        # permite rodar manualmente pelo botao "Run workflow" no GitHub
 
 jobs:
