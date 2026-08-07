@@ -417,60 +417,90 @@ def buscar_stats_por_time(rodadas: list[int] | None = None) -> dict:
         est_m = est.get("mandante", {})
         est_v = est.get("visitante", {})
 
-        # CORREÇÃO: nome real do campo é "finalizacoes_total".
-        fin_m  = float(est_m.get("finalizacoes_total") or est_m.get("finalizacoes")
-                       or est_m.get("chutes") or est_m.get("shots") or 0)
-        fin_v  = float(est_v.get("finalizacoes_total") or est_v.get("finalizacoes")
-                       or est_v.get("chutes") or est_v.get("shots") or 0)
-        fing_m = float(est_m.get("finalizacoes_no_gol") or est_m.get("chutes_a_gol")
-                       or est_m.get("shots_on_target") or 0)
-        fing_v = float(est_v.get("finalizacoes_no_gol") or est_v.get("chutes_a_gol")
-                       or est_v.get("shots_on_target") or 0)
-        esc_m  = float(est_m.get("escanteios") or est_m.get("corners") or 0)
-        esc_v  = float(est_v.get("escanteios") or est_v.get("corners") or 0)
-        cart_m = float(est_m.get("cartoes_amarelos") or est_m.get("yellow_cards") or 0)
-        cart_v = float(est_v.get("cartoes_amarelos") or est_v.get("yellow_cards") or 0)
-        falta_m = float(est_m.get("faltas") or 0)
-        falta_v = float(est_v.get("faltas") or 0)
+        # SANIDADE (07/08/2026 — confirmado via debug: partida id=3281 devolveu
+        # posse_bola=84% e SEM o bloco "visitante" inteiro, SEMANAS depois do
+        # jogo já ter terminado. Não é timing da nossa coleta — o provedor
+        # devolve um snapshot parcial/travado pra essa partida específica.
+        # posse_bola fora de 15-85% é o sinal mais forte de "foto do início
+        # do jogo" — nenhum time fecha uma partida inteira com posse tão
+        # extrema. Quando isso acontece (ou o bloco do lado vem vazio),
+        # tratamos aquele lado como SEM DADO (None) em vez de zero — um
+        # zero falso é pior que não ter dado: contaminaria tanto a média
+        # do time quanto o Medidor de Desempenho comparando previsto x real.
+        def _lado_confiavel(bloco: dict) -> bool:
+            if not bloco:
+                return False
+            posse = bloco.get("posse_bola")
+            if posse is not None and not (15 <= posse <= 85):
+                return False
+            return True
 
-        # SANIDADE (28/07/2026 — outlier confirmado: Fluminense apareceu com
-        # fin_casa=25.0, quase o dobro do range real de ~9-18 chutes/jogo dos
-        # outros times). Uma partida raramente passa de ~35 finalizações de
-        # um time só, ou ~20 finalizações no gol — valores acima disso são
-        # quase certamente erro da própria API (ex: contagem cumulativa em
-        # vez de só daquela partida). Descarta em vez de contaminar a média.
+        m_confiavel = _lado_confiavel(est_m)
+        v_confiavel = _lado_confiavel(est_v)
+        if not m_confiavel:
+            print(f"[AVISO] {nome_m}: dado suspeito/ausente na partida id={pid} "
+                  f"(posse_bola={est_m.get('posse_bola')}), tratando como sem dado")
+        if not v_confiavel:
+            print(f"[AVISO] {nome_v}: dado suspeito/ausente na partida id={pid} "
+                  f"(posse_bola={est_v.get('posse_bola')}), tratando como sem dado")
+
+        # CORREÇÃO: nome real do campo é "finalizacoes_total".
+        fin_m  = (float(est_m.get("finalizacoes_total") or est_m.get("finalizacoes")
+                        or est_m.get("chutes") or est_m.get("shots") or 0)) if m_confiavel else None
+        fin_v  = (float(est_v.get("finalizacoes_total") or est_v.get("finalizacoes")
+                        or est_v.get("chutes") or est_v.get("shots") or 0)) if v_confiavel else None
+        fing_m = (float(est_m.get("finalizacoes_no_gol") or est_m.get("chutes_a_gol")
+                        or est_m.get("shots_on_target") or 0)) if m_confiavel else None
+        fing_v = (float(est_v.get("finalizacoes_no_gol") or est_v.get("chutes_a_gol")
+                        or est_v.get("shots_on_target") or 0)) if v_confiavel else None
+        esc_m  = (float(est_m.get("escanteios") or est_m.get("corners") or 0)) if m_confiavel else None
+        esc_v  = (float(est_v.get("escanteios") or est_v.get("corners") or 0)) if v_confiavel else None
+        cart_m = (float(est_m.get("cartoes_amarelos") or est_m.get("yellow_cards") or 0)) if m_confiavel else None
+        cart_v = (float(est_v.get("cartoes_amarelos") or est_v.get("yellow_cards") or 0)) if v_confiavel else None
+        falta_m = (float(est_m.get("faltas") or 0)) if m_confiavel else None
+        falta_v = (float(est_v.get("faltas") or 0)) if v_confiavel else None
+
+        # SANIDADE (28/07/2026 — outlier confirmado: Fluminense com fin_casa=25.0,
+        # quase o dobro do range real de ~9-18 chutes/jogo). Uma partida raramente
+        # passa de ~35 finalizações de um time só, ou ~20 no gol.
+        #
+        # PISO adicionado em 07/08/2026 — mesmo raciocínio, lado oposto: um jogo
+        # inteiro com <5 finalizações ou <3 faltas de um time é tão improvável
+        # quanto >35 — é a marca de dado capturado no início da partida.
         LIMITE_SANIDADE_CHUTES = 35
         LIMITE_SANIDADE_CHUTES_GOL = 20
+        MINIMO_SANIDADE_CHUTES = 5
+        MINIMO_SANIDADE_FALTAS = 3
 
-        if fin_m > LIMITE_SANIDADE_CHUTES:
-            print(f"[AVISO] {nome_m}: finalizacoes_total suspeito ({fin_m}) na partida id={pid}, descartado")
-            fin_m = 0
-        if fin_v > LIMITE_SANIDADE_CHUTES:
-            print(f"[AVISO] {nome_v}: finalizacoes_total suspeito ({fin_v}) na partida id={pid}, descartado")
-            fin_v = 0
-        if fing_m > LIMITE_SANIDADE_CHUTES_GOL:
-            fing_m = 0
-        if fing_v > LIMITE_SANIDADE_CHUTES_GOL:
-            fing_v = 0
+        def _aplicar_teto_piso(valor, minimo, maximo, nome_time, rotulo):
+            if valor is None:
+                return None
+            if valor > maximo:
+                print(f"[AVISO] {nome_time}: {rotulo} suspeito ({valor}, acima do teto) na partida id={pid}, descartado")
+                return None
+            if valor < minimo:
+                print(f"[AVISO] {nome_time}: {rotulo} suspeito ({valor}, abaixo do piso) na partida id={pid}, descartado")
+                return None
+            return valor
 
-        if fin_m  > 0: stats[nome_m]["finalizacoes_casa"].append(fin_m)
-        if fin_v  > 0: stats[nome_v]["finalizacoes_fora"].append(fin_v)
-        if fing_m > 0: stats[nome_m]["finalizacoes_gol_casa"].append(fing_m)
-        if fing_v > 0: stats[nome_v]["finalizacoes_gol_fora"].append(fing_v)
-        if esc_m  > 0: stats[nome_m]["escanteios_casa"].append(esc_m)
-        if esc_v  > 0: stats[nome_v]["escanteios_fora"].append(esc_v)
-        if cart_m > 0: stats[nome_m]["cartoes_casa"].append(cart_m)
-        if cart_v > 0: stats[nome_v]["cartoes_fora"].append(cart_v)
-        if falta_m > 0: stats[nome_m]["faltas_casa"].append(falta_m)
-        if falta_v > 0: stats[nome_v]["faltas_fora"].append(falta_v)
+        fin_m   = _aplicar_teto_piso(fin_m, MINIMO_SANIDADE_CHUTES, LIMITE_SANIDADE_CHUTES, nome_m, "finalizacoes_total")
+        fin_v   = _aplicar_teto_piso(fin_v, MINIMO_SANIDADE_CHUTES, LIMITE_SANIDADE_CHUTES, nome_v, "finalizacoes_total")
+        fing_m  = _aplicar_teto_piso(fing_m, 0, LIMITE_SANIDADE_CHUTES_GOL, nome_m, "finalizacoes_no_gol")
+        fing_v  = _aplicar_teto_piso(fing_v, 0, LIMITE_SANIDADE_CHUTES_GOL, nome_v, "finalizacoes_no_gol")
+        falta_m = _aplicar_teto_piso(falta_m, MINIMO_SANIDADE_FALTAS, 40, nome_m, "faltas")
+        falta_v = _aplicar_teto_piso(falta_v, MINIMO_SANIDADE_FALTAS, 40, nome_v, "faltas")
 
-        # NOVO (07/08/2026) — antes esses valores eram usados só pra
-        # engordar a média móvel do time e descartados em seguida. Isso
-        # fazia o diagnóstico de acerto (diagnostico.py) nunca conseguir
-        # avaliar escanteios/cartões/chutes/faltas por não ter o valor
-        # REAL daquela partida específica pra comparar com a previsão.
-        # Agora grava também o valor bruto por partida, permitindo o
-        # Medidor de Desempenho mostrar ✅/❌ nesses mercados também.
+        if fin_m   is not None and fin_m   > 0: stats[nome_m]["finalizacoes_casa"].append(fin_m)
+        if fin_v   is not None and fin_v   > 0: stats[nome_v]["finalizacoes_fora"].append(fin_v)
+        if fing_m  is not None and fing_m  > 0: stats[nome_m]["finalizacoes_gol_casa"].append(fing_m)
+        if fing_v  is not None and fing_v  > 0: stats[nome_v]["finalizacoes_gol_fora"].append(fing_v)
+        if esc_m   is not None and esc_m   > 0: stats[nome_m]["escanteios_casa"].append(esc_m)
+        if esc_v   is not None and esc_v   > 0: stats[nome_v]["escanteios_fora"].append(esc_v)
+        if cart_m  is not None and cart_m  > 0: stats[nome_m]["cartoes_casa"].append(cart_m)
+        if cart_v  is not None and cart_v  > 0: stats[nome_v]["cartoes_fora"].append(cart_v)
+        if falta_m is not None and falta_m > 0: stats[nome_m]["faltas_casa"].append(falta_m)
+        if falta_v is not None and falta_v > 0: stats[nome_v]["faltas_fora"].append(falta_v)
+
         salvar_estatisticas_partida(
             fixture_id=pid,
             casa_nome=nome_m, fora_nome=nome_v,
