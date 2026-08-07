@@ -1,0 +1,38 @@
+name: Backfill Stats Completo (manual)
+
+on:
+  workflow_dispatch:
+    inputs:
+      liga:
+        description: 'Qual liga reprocessar'
+        required: true
+        default: 'ambas'
+        type: choice
+        options:
+          - a
+          - b
+          - ambas
+
+jobs:
+  rodar-backfill:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout do repositorio
+        uses: actions/checkout@v4
+
+      - name: Configurar Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Instalar dependencias
+        run: |
+          pip install -r requirements.txt
+
+      - name: Rodar backfill_stats_completo.py
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+          DADOS_FUTEBOL_KEY: ${{ secrets.DADOS_FUTEBOL_KEY }}
+        run: |
+          python backfill_stats_completo.py --liga ${{ github.event.inputs.liga }}
