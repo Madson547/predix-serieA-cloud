@@ -8,7 +8,7 @@ from qualitativo import calcular_fator_qualitativo, buscar_noticias_recentes, bu
 from ia_qualitativa import analisar_texto_qualitativo, salvar_ajuste_manual
 from previsoes import salvar_previsao, buscar_previsoes, buscar_previsoes_do_dia
 from diagnostico import calcular_taxas_acerto, melhores_categorias, NOMES_CATEGORIAS, avaliar_mercados_previstos, gerar_relatorio_partida
-from banca import salvar_aposta, buscar_apostas, atualizar_resultado_aposta, excluir_aposta, calcular_roi
+from banca import salvar_aposta, buscar_apostas, atualizar_resultado_aposta, excluir_aposta, calcular_roi, buscar_evolucao_lucro
 from ia_apostas import analisar_print_aposta
 
 st.set_page_config(layout="wide", page_title="Predix Sports", page_icon="🇧🇷")
@@ -677,13 +677,33 @@ with aba_performance:
     st.subheader("📈 Medidor de Desempenho")
     st.caption("Busque previsões salvas pra comparar com o resultado real depois do jogo.")
 
-    termo_busca = st.text_input("Buscar por time (ou deixe vazio pra ver as mais recentes):", "")
+    col_busca, col_filtro = st.columns([2, 1])
+    with col_busca:
+        termo_busca = st.text_input("Buscar por time (ou deixe vazio pra ver as mais recentes):", "")
+    with col_filtro:
+        filtro_exibicao = st.radio(
+            "Exibir:", ["Só pendentes", "Tudo"], horizontal=True, key="filtro_medidor"
+        )
     previsoes_salvas = buscar_previsoes(termo_busca, sufixo_liga=SUFIXO)
 
     if not previsoes_salvas:
         st.info("Nenhuma previsão salva ainda. Use o botão '💾 Salvar previsão' na aba Painel Analítico.")
     else:
+        # Busca o status real de cada previsão ANTES de decidir se exibe —
+        # isso é só um filtro visual, nada é apagado do banco. A amostra
+        # continua intacta pra calcular_taxas_acerto()/Bingo mesmo pros
+        # jogos escondidos daqui.
+        pendentes_ocultados = 0
         for p in previsoes_salvas:
+            jogo_real = supabase.table(f"jogos{SUFIXO}").select("gols_casa,gols_fora,status") \
+                .eq("casa_nome", p['time_casa']).eq("fora_nome", p['time_fora']) \
+                .eq("data", p['data']).execute().data
+            encerrado = bool(jogo_real and jogo_real[0].get("status") == "encerrado")
+
+            if filtro_exibicao == "Só pendentes" and encerrado:
+                pendentes_ocultados += 1
+                continue
+
             with st.expander(f"{p['time_casa']} x {p['time_fora']} — {p.get('data','')}"):
                 st.write(f"Vitória {p['time_casa']}: {p['prob_casa']}% | Empate: {p['prob_empate']}% | Vitória {p['time_fora']}: {p['prob_fora']}%")
                 st.write(f"Ambas Marcam: {p['prob_btts']}% | Gols >1.5: {p['over15_ft']}% | Gols >2.5: {p['over25_ft']}%")
@@ -722,6 +742,10 @@ with aba_performance:
                         st.info(f"📋 {relatorio}")
                 else:
                     st.caption("⏳ Jogo ainda não encerrado (ou sem placar salvo).")
+
+        if pendentes_ocultados:
+            st.caption(f"({pendentes_ocultados} previsão(ões) já encerrada(s) oculta(s) — nada foi apagado, "
+                       f"muda pra 'Tudo' acima pra ver. Todas continuam contando pro Bingo e pro ROI.)")
 
 with aba_banca:
     st.subheader("🏦 Controle de Banca")
@@ -853,6 +877,16 @@ with aba_banca:
             col2.metric("Retorno", f"R$ {geral['retorno']:.2f}")
             col3.metric("Lucro/Prejuízo", f"R$ {geral['lucro']:.2f}", delta=f"{geral['roi']}% ROI")
             col4.metric("Taxa de acerto", f"{geral['taxa_acerto']}%", f"{geral['vitorias']}/{geral['total_apostas']}")
+
+            evolucao = buscar_evolucao_lucro()
+            if len(evolucao) >= 2:
+                st.markdown("---")
+                st.markdown("#### 📈 Evolução do lucro acumulado")
+                df_evolucao = pd.DataFrame(evolucao).set_index("data")
+                st.line_chart(df_evolucao["lucro_acumulado"])
+                st.caption("Cada ponto é uma aposta resolvida, em ordem cronológica — mostra tendência, não só a foto de agora.")
+            elif len(evolucao) == 1:
+                st.caption("Só 1 aposta resolvida até agora — o gráfico de evolução aparece a partir da 2ª.")
 
             st.markdown("---")
             st.markdown("#### Por liga")
