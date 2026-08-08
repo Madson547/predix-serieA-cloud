@@ -10,7 +10,12 @@ from database import supabase
 
 
 def salvar_aposta(data_aposta, liga, jogos_envolvidos, mercados, categoria_estimada,
-                   tipo_aposta, odd, stake, observacoes="", fonte_print=False) -> bool:
+                   tipo_aposta, odd, stake, observacoes="", fonte_print=False,
+                   mercados_estruturado_json: str = None) -> bool:
+    """mercados_estruturado_json: JSON com a lista de pernas estruturadas
+    (casa/fora/data/sufixo_liga/categoria/direcao/linha/nome/prob), capturada
+    no momento em que a aposta vem de uma sugestão do Bingo — None pra
+    apostas digitadas na mão, que continuam sem avaliação automática."""
     try:
         supabase.table("apostas").insert({
             "data_aposta": data_aposta,
@@ -24,6 +29,7 @@ def salvar_aposta(data_aposta, liga, jogos_envolvidos, mercados, categoria_estim
             "status": "pendente",
             "observacoes": observacoes,
             "fonte_print": fonte_print,
+            "mercados_estruturado_json": mercados_estruturado_json,
         }).execute()
         return True
     except Exception as e:
@@ -165,3 +171,71 @@ def calcular_roi(liga: str = None) -> dict:
         "por_categoria": por_categoria,
         "por_tipo": por_tipo,
     }
+
+
+# ==========================================================
+# AVALIAÇÃO AUTOMÁTICA (sugestão, não decide sozinho)
+#
+# Só funciona pra apostas com mercados_estruturado_json preenchido —
+# criadas a partir de uma cartela do Bingo. Apostas digitadas na mão
+# não têm estrutura e caem em "sem_estrutura" (sem sugestão, segue
+# 100% manual como sempre foi). O clique final em Ganhou/Perdeu na
+# aba Pendentes continua sendo do usuário em qualquer caso — esta
+# função nunca chama atualizar_resultado_aposta() sozinha.
+# ==========================================================
+
+import json
+from diagnostico import _acertou, _buscar_real_do_jogo
+
+
+def avaliar_aposta_automaticamente(aposta: dict) -> dict:
+    """
+    Retorna:
+        {"status": "ganhou"|"perdeu"|"aguardando"|"indeterminado"|"sem_estrutura",
+         "detalhes": [{"nome": str, "jogo": str, "acerto": True|False|None}, ...]}
+    """
+    bruto = aposta.get("mercados_estruturado_json")
+    if not bruto:
+        return {"status": "sem_estrutura", "detalhes": []}
+
+    try:
+        pernas = json.loads(bruto) if isinstance(bruto, str) else bruto
+    except (json.JSONDecodeError, TypeError):
+        return {"status": "sem_estrutura", "detalhes": []}
+
+    if not pernas:
+        return {"status": "sem_estrutura", "detalhes": []}
+
+    cache_real = {}
+    detalhes = []
+    algum_pendente = False
+    algum_indeterminado = False
+
+    for perna in pernas:
+        chave_jogo = (perna.get("casa"), perna.get("fora"), perna.get("data"), perna.get("sufixo_liga", ""))
+        if chave_jogo not in cache_real:
+            cache_real[chave_jogo] = _buscar_real_do_jogo(
+                perna.get("casa"), perna.get("fora"), perna.get("data"), perna.get("sufixo_liga", "")
+            )
+        real, encerrado = cache_real[chave_jogo]
+        nome_jogo = f"{perna.get('casa')} x {perna.get('fora')}"
+
+        if not encerrado:
+            algum_pendente = True
+            detalhes.append({"nome": perna.get("nome", perna.get("categoria")), "jogo": nome_jogo, "acerto": None})
+            continue
+
+        mercado = {"direcao": perna.get("direcao"), "linha": perna.get("linha")}
+        acerto = _acertou(perna.get("categoria"), mercado, real)
+        if acerto is None:
+            algum_indeterminado = True
+        detalhes.append({"nome": perna.get("nome", perna.get("categoria")), "jogo": nome_jogo, "acerto": acerto})
+
+    if algum_pendente:
+        status = "aguardando"
+    elif algum_indeterminado:
+        status = "indeterminado"
+    else:
+        status = "ganhou" if all(d["acerto"] for d in detalhes) else "perdeu"
+
+    return {"status": status, "detalhes": detalhes}
