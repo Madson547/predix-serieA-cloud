@@ -8,7 +8,7 @@ from qualitativo import calcular_fator_qualitativo, buscar_noticias_recentes, bu
 from ia_qualitativa import analisar_texto_qualitativo, salvar_ajuste_manual
 from previsoes import salvar_previsao, buscar_previsoes, buscar_previsoes_do_dia
 from diagnostico import calcular_taxas_acerto, melhores_categorias, NOMES_CATEGORIAS, avaliar_mercados_previstos, gerar_relatorio_partida
-from banca import salvar_aposta, buscar_apostas, atualizar_resultado_aposta, excluir_aposta, calcular_roi, buscar_evolucao_lucro
+from banca import salvar_aposta, buscar_apostas, atualizar_resultado_aposta, excluir_aposta, calcular_roi, buscar_evolucao_lucro, avaliar_aposta_automaticamente
 from ia_apostas import analisar_print_aposta
 
 st.set_page_config(layout="wide", page_title="Predix Sports", page_icon="🇧🇷")
@@ -566,6 +566,8 @@ with aba_bingo:
 
         st.markdown("---")
 
+        pernas_estruturadas_dia = []
+
         for p in previsoes_hoje:
             if not p.get("mercados_json"):
                 continue
@@ -615,8 +617,29 @@ with aba_bingo:
             st.markdown(f"### {titulo_jogo}")
             for legenda, perna in zip(legenda_pernas, pernas_bingo):
                 st.success(f"{legenda} — **{perna['nome']}** ({perna['prob']}%)")
+                pernas_estruturadas_dia.append({
+                    "casa": p["time_casa"], "fora": p["time_fora"], "data": p["data"],
+                    "sufixo_liga": SUFIXO, "categoria": perna.get("tipo"),
+                    "direcao": perna.get("direcao"), "linha": perna.get("linha"),
+                    "nome": perna.get("nome"), "prob": perna.get("prob"),
+                })
             st.info(f"📊 Probabilidade combinada do Bingo: **{prob_combinada}%**")
             st.markdown("---")
+
+        if pernas_estruturadas_dia:
+            st.markdown("#### 💾 Registrar cartela na Banca")
+            st.caption(
+                "Junta todas as pernas mostradas acima (de todos os jogos do dia) numa "
+                "aposta pendente só, já com os dados estruturados — permite sugestão "
+                "automática de resultado depois que os jogos encerrarem."
+            )
+            if st.button("💾 Registrar cartela do Bingo como aposta pendente", key=f"btn_registrar_bingo{SUFIXO}"):
+                texto_mercados = " + ".join(perna["nome"] for perna in pernas_estruturadas_dia)
+                jogos_unicos = sorted(set(f"{pp['casa']} x {pp['fora']}" for pp in pernas_estruturadas_dia))
+                st.session_state["nova_jogos"] = " + ".join(jogos_unicos)
+                st.session_state["nova_mercados"] = texto_mercados
+                st.session_state["bingo_pernas_estruturadas"] = pernas_estruturadas_dia
+                st.success("Cartela pronta! Vai na aba '🏦 Banca → ➕ Nova Aposta' — os campos já vêm pré-preenchidos.")
 
 
 with aba_multiplas:
@@ -817,15 +840,21 @@ with aba_banca:
             if not nova_jogos or not nova_mercados or not nova_odd or not nova_stake:
                 st.error("Preenche pelo menos jogo, mercado, odd e valor apostado.")
             else:
+                pernas_estruturadas = st.session_state.get("bingo_pernas_estruturadas")
                 ok = salvar_aposta(
                     data_aposta=nova_data.isoformat(), liga=nova_liga,
                     jogos_envolvidos=nova_jogos, mercados=nova_mercados,
                     categoria_estimada=nova_categoria, tipo_aposta=nova_tipo,
                     odd=nova_odd, stake=nova_stake, observacoes=nova_obs,
                     fonte_print=bool(print_bilhete),
+                    mercados_estruturado_json=json.dumps(pernas_estruturadas, ensure_ascii=False) if pernas_estruturadas else None,
                 )
                 if ok:
-                    st.success("✅ Aposta salva como pendente! Marca o resultado na aba '⏳ Pendentes' depois que o jogo acabar.")
+                    st.session_state.pop("bingo_pernas_estruturadas", None)
+                    if pernas_estruturadas:
+                        st.success("✅ Aposta salva como pendente, com dados estruturados do Bingo — vai ter sugestão automática de resultado na aba '⏳ Pendentes'.")
+                    else:
+                        st.success("✅ Aposta salva como pendente! Marca o resultado na aba '⏳ Pendentes' depois que o jogo acabar.")
                 else:
                     st.error("Não consegui salvar — confira o log do Streamlit Cloud.")
 
@@ -845,6 +874,22 @@ with aba_banca:
                         f"Se ganhou, retorno automático: R$ {ap['stake'] * ap['odd']:.2f} | "
                         f"Se perdeu: -R$ {ap['stake']:.2f}"
                     )
+
+                    sugestao = avaliar_aposta_automaticamente(ap)
+                    if sugestao["status"] == "ganhou":
+                        st.markdown("🤖 **Sugestão automática: ✅ Ganhou** — confira e clica em Ganhou abaixo pra confirmar.")
+                    elif sugestao["status"] == "perdeu":
+                        st.markdown("🤖 **Sugestão automática: ❌ Perdeu** — confira e clica em Perdeu abaixo pra confirmar.")
+                    elif sugestao["status"] == "aguardando":
+                        st.caption("🤖 Sugestão automática: aguardando jogo(s) encerrar(em).")
+                    elif sugestao["status"] == "indeterminado":
+                        st.caption("🤖 Sugestão automática: parcialmente avaliável — confira o detalhamento.")
+                        with st.expander("Ver detalhamento por perna"):
+                            for d in sugestao["detalhes"]:
+                                icone = "✅" if d["acerto"] is True else "❌" if d["acerto"] is False else "❔"
+                                st.write(f"{icone} {d['jogo']} — {d['nome']}")
+                    # status "sem_estrutura" = aposta digitada na mão, sem sugestão — segue 100% manual
+
                     col1, col2, col3 = st.columns(3)
                     with col1:
                         if st.button("✅ Ganhou", key=f"ganhou_{ap['id']}"):
