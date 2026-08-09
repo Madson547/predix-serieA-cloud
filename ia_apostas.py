@@ -80,7 +80,14 @@ def analisar_print_aposta(imagem_bytes: bytes, media_type: str = "image/png") ->
         }],
     )
 
-    bruto = mensagem.content[0].text.strip()
+    # CORREÇÃO (09/08/2026): content[0] nem sempre é texto — quando o modelo
+    # usa extended thinking, o primeiro bloco pode ser um ThinkingBlock (sem
+    # atributo .text), quebrando com AttributeError. Filtra só os blocos do
+    # tipo "text" e junta — robusto independente de vir thinking ou não.
+    blocos_texto = [bloco.text for bloco in mensagem.content if getattr(bloco, "type", None) == "text"]
+    if not blocos_texto:
+        raise RuntimeError("A IA não retornou nenhum bloco de texto na resposta.")
+    bruto = "".join(blocos_texto).strip()
     if bruto.startswith("```"):
         bruto = bruto.strip("`")
         if bruto.lower().startswith("json"):
