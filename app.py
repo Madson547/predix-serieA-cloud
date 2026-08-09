@@ -790,13 +790,34 @@ with aba_banca:
             "pré-preenche os campos abaixo — confira e ajuste antes de salvar."
         )
         print_bilhete = st.file_uploader(
-            "Print do bilhete", type=["png", "jpg", "jpeg"], key="upload_bilhete"
+            "Print(s) do bilhete", type=["png", "jpg", "jpeg"], key="upload_bilhete",
+            accept_multiple_files=True,
         )
-        if print_bilhete and st.button("🤖 Analisar print com IA", key="btn_analisar_bilhete"):
-            try:
-                with st.spinner("Lendo o bilhete..."):
-                    media_type = print_bilhete.type or "image/png"
-                    sugestao_aposta = analisar_print_aposta(print_bilhete.getvalue(), media_type)
+        if print_bilhete and st.button("🤖 Analisar print(s) com IA", key="btn_analisar_bilhete"):
+            lote = []
+            erros = []
+            with st.spinner(f"Lendo {len(print_bilhete)} bilhete(s)..."):
+                for arquivo in print_bilhete:
+                    try:
+                        media_type = arquivo.type or "image/png"
+                        sugestao_aposta = analisar_print_aposta(arquivo.getvalue(), media_type)
+                        sugestao_aposta["_nome_arquivo"] = arquivo.name
+                        lote.append(sugestao_aposta)
+                    except Exception as e:
+                        erros.append(f"{arquivo.name}: {e}")
+            st.session_state["bilhetes_lote"] = lote
+            if lote:
+                st.success(f"✅ {len(lote)} bilhete(s) lido(s). Escolhe abaixo qual carregar no formulário.")
+            if erros:
+                st.error("Erro ao ler: " + " | ".join(erros))
+
+        lote = st.session_state.get("bilhetes_lote") or []
+        if lote:
+            opcoes = [f"{i+1}. {b['_nome_arquivo']} — {b['jogos_envolvidos'] or '(sem jogo identificado)'}" for i, b in enumerate(lote)]
+            escolha = st.selectbox("Qual bilhete carregar no formulário abaixo?", opcoes, key="sel_bilhete_lote")
+            idx_escolhido = opcoes.index(escolha)
+            if st.button("⬇️ Carregar este bilhete no formulário", key="btn_carregar_bilhete_lote"):
+                sugestao_aposta = lote[idx_escolhido]
                 st.session_state["nova_jogos"] = sugestao_aposta["jogos_envolvidos"]
                 st.session_state["nova_mercados"] = sugestao_aposta["mercados"]
                 st.session_state["nova_categoria"] = sugestao_aposta["categoria_estimada"]
@@ -805,9 +826,7 @@ with aba_banca:
                     st.session_state["nova_odd"] = sugestao_aposta["odd"]
                 if sugestao_aposta["stake"] is not None:
                     st.session_state["nova_stake"] = sugestao_aposta["stake"]
-                st.success(f"✅ Bilhete lido (confiança da IA: {sugestao_aposta['confianca']}). Confira os campos abaixo.")
-            except Exception as e:
-                st.error(f"Erro ao analisar o print: {e}")
+                st.success(f"Carregado (confiança da IA: {sugestao_aposta['confianca']}). Confira os campos abaixo e salva quando estiver certo.")
 
         st.markdown("#### ✍️ Opção 2 — Ou preenche direto")
         col_a, col_b = st.columns(2)
