@@ -800,14 +800,16 @@ with aba_banca:
                 for arquivo in print_bilhete:
                     try:
                         media_type = arquivo.type or "image/png"
-                        sugestao_aposta = analisar_print_aposta(arquivo.getvalue(), media_type)
-                        sugestao_aposta["_nome_arquivo"] = arquivo.name
-                        lote.append(sugestao_aposta)
+                        sub_apostas = analisar_print_aposta(arquivo.getvalue(), media_type)
+                        for i, sugestao_aposta in enumerate(sub_apostas):
+                            sufixo_nome = f" (sub-aposta {i+1}/{len(sub_apostas)})" if len(sub_apostas) > 1 else ""
+                            sugestao_aposta["_nome_arquivo"] = f"{arquivo.name}{sufixo_nome}"
+                            lote.append(sugestao_aposta)
                     except Exception as e:
                         erros.append(f"{arquivo.name}: {e}")
             st.session_state["bilhetes_lote"] = lote
             if lote:
-                st.success(f"✅ {len(lote)} bilhete(s) lido(s). Escolhe abaixo qual carregar no formulário.")
+                st.success(f"✅ {len(lote)} sub-aposta(s) lida(s) em {len(print_bilhete)} imagem(ns). Escolhe abaixo qual carregar no formulário.")
             if erros:
                 st.error("Erro ao ler: " + " | ".join(erros))
 
