@@ -199,7 +199,17 @@ def buscar_partidas() -> list:
     atualizados nas próximas execuções do coletor.
     """
     numero_rodada = buscar_numero_rodada_atual()
-    rodadas = list(range(max(1, numero_rodada - 2), numero_rodada + 1)) if numero_rodada else None
+    # CORREÇÃO (08/08/2026 — confirmado: Rodada 21 nunca foi marcada
+    # 'encerrada' pela API, provavelmente por causa de 1 jogo adiado/
+    # remarcado dela. Como a janela só olhava pra trás do candidato
+    # (candidato-2 até candidato), a Rodada 22 — com jogos acontecendo
+    # HOJE de verdade — nunca era buscada, mesmo com o robô rodando
+    # normalmente todo dia. Agora a janela também olha 2 rodadas PRA
+    # FRENTE do candidato. Sem risco: jogo ainda não realizado só entra
+    # como status='agendado', que já é o comportamento esperado pra
+    # "Próximos Jogos" — não contamina nada, só evita ficar cego pra
+    # rodadas futuras quando o candidato trava.
+    rodadas = list(range(max(1, numero_rodada - 2), numero_rodada + 3)) if numero_rodada else None
 
     partidas_raw = []
     vistos = set()
