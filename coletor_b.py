@@ -360,16 +360,24 @@ def salvar_estatisticas_partida(
             "casa_nome": casa_nome,
             "fora_nome": fora_nome,
             "data": data_jogo,
-            "escanteios_casa": escanteios_casa or None,
-            "escanteios_fora": escanteios_fora or None,
-            "cartoes_casa": cartoes_casa or None,
-            "cartoes_fora": cartoes_fora or None,
-            "chutes_casa": chutes_casa or None,
-            "chutes_fora": chutes_fora or None,
-            "chutes_gol_casa": chutes_gol_casa or None,
-            "chutes_gol_fora": chutes_gol_fora or None,
-            "faltas_casa": faltas_casa or None,
-            "faltas_fora": faltas_fora or None,
+            # CORREÇÃO 11/08/2026: era "valor or None", que apagava
+            # estatísticas REAIS (ex: escanteios_casa=0.0 virava NULL,
+            # já que 0.0 é falsy em Python). Os valores já chegam None
+            # corretamente quando o lado não é confiável (_lado_confiavel);
+            # não precisa (nem pode) reforçar isso aqui — isso explicava
+            # jogos como Athletic-MG x Criciúma (id=3288) ficarem com
+            # escanteios/cartões NULL mesmo tendo passado no filtro de
+            # confiabilidade.
+            "escanteios_casa": escanteios_casa,
+            "escanteios_fora": escanteios_fora,
+            "cartoes_casa": cartoes_casa,
+            "cartoes_fora": cartoes_fora,
+            "chutes_casa": chutes_casa,
+            "chutes_fora": chutes_fora,
+            "chutes_gol_casa": chutes_gol_casa,
+            "chutes_gol_fora": chutes_gol_fora,
+            "faltas_casa": faltas_casa,
+            "faltas_fora": faltas_fora,
             "data_atualizacao": datetime.now().isoformat(),
         }, on_conflict="fixture_id").execute()
     except Exception as e:
@@ -481,17 +489,21 @@ def buscar_stats_por_time(rodadas: list[int] | None = None) -> dict:
         # posse_bola=84% e SEM o bloco "visitante" inteiro, SEMANAS depois do
         # jogo já ter terminado. Não é timing da nossa coleta — o provedor
         # devolve um snapshot parcial/travado pra essa partida específica.
-        # posse_bola fora de 15-85% é o sinal mais forte de "foto do início
-        # do jogo" — nenhum time fecha uma partida inteira com posse tão
-        # extrema. Quando isso acontece (ou o bloco do lado vem vazio),
-        # tratamos aquele lado como SEM DADO (None) em vez de zero — um
-        # zero falso é pior que não ter dado: contaminaria tanto a média
-        # do time quanto o Medidor de Desempenho comparando previsto x real.
+        # O sinal mais forte de "foto do início do jogo" é o bloco de um dos
+        # lados vir ausente (checado abaixo). A posse isolada só reprova
+        # valores fisicamente implausíveis.
+        #
+        # AJUSTE 11/08/2026 — confirmado via SQL: a faixa 15-85% estava
+        # descartando dado REAL de jogos com domínio de posse extremo mas
+        # legítimo (Goiás 88% x Londrina 12%, ambos os blocos presentes e
+        # complementares — não é captura parcial, é só um jogo desigual).
+        # Faixa alargada pra 3-97%, que ainda pega valores fisicamente
+        # implausíveis (tipo 99x1) sem descartar domínio real.
         def _lado_confiavel(bloco: dict) -> bool:
             if not bloco:
                 return False
             posse = bloco.get("posse_bola")
-            if posse is not None and not (15 <= posse <= 85):
+            if posse is not None and not (3 <= posse <= 97):
                 return False
             return True
 
