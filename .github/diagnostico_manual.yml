@@ -21,4 +21,4 @@ jobs:
       - name: Rodar diagnóstico
         env:
           DADOS_FUTEBOL_KEY: ${{ secrets.DADOS_FUTEBOL_KEY }}
-        run: python diagnostico_campos_3291.py
+        run: python diagnostico_campos_3283.py
