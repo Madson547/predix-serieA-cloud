@@ -5,7 +5,7 @@ load_dotenv()
 
 DADOS_FUTEBOL_KEY = os.getenv("DADOS_FUTEBOL_KEY")
 BASE_URL = "https://api.dadosfutebol.com.br/v1"
-FIXTURE_ID = 3291  # Goiás x Londrina
+FIXTURE_ID = 3283  # Goiás x Londrina
 
 resp = requests.get(
     f"{BASE_URL}/partidas/{FIXTURE_ID}/estatisticas",
