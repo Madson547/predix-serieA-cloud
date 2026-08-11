@@ -1,0 +1,24 @@
+name: Diagnóstico Manual
+
+on:
+  workflow_dispatch:
+
+jobs:
+  diagnostico:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout do código
+        uses: actions/checkout@v4
+
+      - name: Configurar Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Instalar dependências
+        run: pip install requests python-dotenv
+
+      - name: Rodar diagnóstico
+        env:
+          DADOS_FUTEBOL_KEY: ${{ secrets.DADOS_FUTEBOL_KEY }}
+        run: python diagnostico_campos_3291.py
