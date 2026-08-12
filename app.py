@@ -7,7 +7,7 @@ from poisson import MotorPoisson
 from qualitativo import calcular_fator_qualitativo, buscar_noticias_recentes, buscar_ajuste_manual, calcular_forma_recente
 from ia_qualitativa import analisar_texto_qualitativo, salvar_ajuste_manual
 from previsoes import salvar_previsao, buscar_previsoes, buscar_previsoes_do_dia
-from diagnostico import calcular_taxas_acerto, melhores_categorias, NOMES_CATEGORIAS, avaliar_mercados_previstos, gerar_relatorio_partida
+from diagnostico import calcular_taxas_acerto, melhores_categorias, NOMES_CATEGORIAS, avaliar_mercados_previstos, gerar_relatorio_partida, CATEGORIAS_DIAGNOSTICAVEIS
 from banca import salvar_aposta, buscar_apostas, atualizar_resultado_aposta, excluir_aposta, calcular_roi, buscar_evolucao_lucro, avaliar_aposta_automaticamente
 from ia_apostas import analisar_print_aposta
 
@@ -696,79 +696,129 @@ with aba_tabela:
     else:
         st.info("Tabela não disponível.")
 
+def _tabela_taxas_acerto(taxas: dict) -> pd.DataFrame:
+    """Monta o DataFrame de exibição da tabela agregada de taxas de acerto
+    por categoria diagnosticável, ordenada com as categorias 'confiáveis'
+    (15+ amostras) primeiro, por taxa decrescente."""
+    linhas = []
+    for cat in CATEGORIAS_DIAGNOSTICAVEIS:
+        d = taxas.get(cat, {"acertos": 0, "total": 0, "taxa": 0.0, "confiavel": False})
+        linhas.append({
+            "Mercado": NOMES_CATEGORIAS.get(cat, cat),
+            "Acertos": d["acertos"],
+            "Total": d["total"],
+            "Taxa": d["taxa"],
+            "Status": "✅ Confiável" if d["confiavel"] else "⏳ Coletando (mín. 15)",
+        })
+    df = pd.DataFrame(linhas)
+    df["_ordem"] = df["Status"].apply(lambda s: 0 if "Confiável" in s else 1)
+    df = df.sort_values(["_ordem", "Taxa"], ascending=[True, False]).drop(columns="_ordem")
+    return df
+
+
+def _colorir_taxa(row):
+    """Só colore linhas já 'Confiável' — categorias com amostra pequena
+    não devem parecer boas/ruins ainda, o número não é estável."""
+    if "Confiável" not in row["Status"]:
+        return [''] * len(row)
+    if row["Taxa"] >= 55:
+        cor = 'background-color: #1b4332; color: white'
+    elif row["Taxa"] < 45:
+        cor = 'background-color: #4a1919; color: white'
+    else:
+        cor = ''
+    return [cor] * len(row)
+
+
 with aba_performance:
     st.subheader("📈 Medidor de Desempenho")
-    st.caption("Busque previsões salvas pra comparar com o resultado real depois do jogo.")
 
-    col_busca, col_filtro = st.columns([2, 1])
-    with col_busca:
-        termo_busca = st.text_input("Buscar por time (ou deixe vazio pra ver as mais recentes):", "")
-    with col_filtro:
-        filtro_exibicao = st.radio(
-            "Exibir:", ["Só pendentes", "Tudo"], horizontal=True, key="filtro_medidor"
+    col_lista, col_resumo = st.columns([2, 1])
+
+    with col_resumo:
+        st.markdown("#### 🎯 Taxa de acerto por mercado")
+        st.caption(f"Amostra geral — {liga['nome_exibicao']}")
+        taxas_gerais = calcular_taxas_acerto(min_amostras=15, sufixo_liga=SUFIXO)
+        df_taxas = _tabela_taxas_acerto(taxas_gerais)
+        styled_taxas = df_taxas.style.apply(_colorir_taxa, axis=1).format({"Taxa": "{:.1f}%"})
+        st.dataframe(styled_taxas, use_container_width=True, hide_index=True, height=460)
+        st.caption(
+            "55%+ em verde, abaixo de 45% em vermelho — só nas linhas já 'Confiável' "
+            "(15+ amostras). As demais ainda não têm amostra suficiente pra confiar no número."
         )
-    previsoes_salvas = buscar_previsoes(termo_busca, sufixo_liga=SUFIXO)
 
-    if not previsoes_salvas:
-        st.info("Nenhuma previsão salva ainda. Use o botão '💾 Salvar previsão' na aba Painel Analítico.")
-    else:
-        # Busca o status real de cada previsão ANTES de decidir se exibe —
-        # isso é só um filtro visual, nada é apagado do banco. A amostra
-        # continua intacta pra calcular_taxas_acerto()/Bingo mesmo pros
-        # jogos escondidos daqui.
-        pendentes_ocultados = 0
-        for p in previsoes_salvas:
-            jogo_real = supabase.table(f"jogos{SUFIXO}").select("gols_casa,gols_fora,status") \
-                .eq("casa_nome", p['time_casa']).eq("fora_nome", p['time_fora']) \
-                .eq("data", p['data']).execute().data
-            encerrado = bool(jogo_real and jogo_real[0].get("status") == "encerrado")
+    with col_lista:
+        st.caption("Busque previsões salvas pra comparar com o resultado real depois do jogo.")
 
-            if filtro_exibicao == "Só pendentes" and encerrado:
-                pendentes_ocultados += 1
-                continue
+        col_busca, col_filtro = st.columns([2, 1])
+        with col_busca:
+            termo_busca = st.text_input("Buscar por time (ou deixe vazio pra ver as mais recentes):", "")
+        with col_filtro:
+            filtro_exibicao = st.radio(
+                "Exibir:", ["Só pendentes", "Tudo"], horizontal=True, key="filtro_medidor"
+            )
+        previsoes_salvas = buscar_previsoes(termo_busca, sufixo_liga=SUFIXO)
 
-            with st.expander(f"{p['time_casa']} x {p['time_fora']} — {p.get('data','')}"):
-                st.write(f"Vitória {p['time_casa']}: {p['prob_casa']}% | Empate: {p['prob_empate']}% | Vitória {p['time_fora']}: {p['prob_fora']}%")
-                st.write(f"Ambas Marcam: {p['prob_btts']}% | Gols >1.5: {p['over15_ft']}% | Gols >2.5: {p['over25_ft']}%")
-                st.write(f"Escanteios: média {p['cantos_ft']} | linha {p['linha_cantos']} | over: {p['prob_over_cantos']}%")
-                st.write(f"Cartões: média {p['cartoes_ft']} | linha {p['linha_cartoes']} | over: {p['prob_over_cartoes']}%")
-                st.write(f"Placar mais provável: {p['placar_mais_provavel']}")
-
-                multiplas_salvas = json.loads(p["multiplas_json"]) if p.get("multiplas_json") else []
-                if multiplas_salvas:
-                    st.markdown("**Múltiplas geradas nessa previsão:**")
-                    for m in multiplas_salvas:
-                        pernas_txt = " + ".join(f"{leg['nome']} ({leg['prob']:.1f}%)" for leg in m["pernas"])
-                        st.caption(f"{m['titulo']}: {pernas_txt} → combinada {m['prob_combinada']}%")
-
+        if not previsoes_salvas:
+            st.info("Nenhuma previsão salva ainda. Use o botão '💾 Salvar previsão' na aba Painel Analítico.")
+        else:
+            # Busca o status real de cada previsão ANTES de decidir se exibe —
+            # isso é só um filtro visual, nada é apagado do banco. A amostra
+            # continua intacta pra calcular_taxas_acerto()/Bingo mesmo pros
+            # jogos escondidos daqui.
+            pendentes_ocultados = 0
+            for p in previsoes_salvas:
                 jogo_real = supabase.table(f"jogos{SUFIXO}").select("gols_casa,gols_fora,status") \
                     .eq("casa_nome", p['time_casa']).eq("fora_nome", p['time_fora']) \
                     .eq("data", p['data']).execute().data
-                if jogo_real and jogo_real[0].get("status") == "encerrado":
-                    gc, gf = jogo_real[0]["gols_casa"], jogo_real[0]["gols_fora"]
-                    st.success(f"✅ Resultado real: {p['time_casa']} {gc} x {gf} {p['time_fora']}")
+                encerrado = bool(jogo_real and jogo_real[0].get("status") == "encerrado")
 
-                    avaliacoes = avaliar_mercados_previstos(
-                        p.get("mercados_json"), p['time_casa'], p['time_fora'], p['data'], sufixo_liga=SUFIXO
-                    )
-                    if avaliacoes:
-                        st.markdown("**Mercados previstos x resultado real:**")
-                        for a in avaliacoes:
-                            if a["acerto"] is True:
-                                st.markdown(f"✅ {a['nome_categoria']}: **{a['mercado']}** (previsto {a['confianca']}%)")
-                            elif a["acerto"] is False:
-                                st.markdown(f"❌ {a['nome_categoria']}: **{a['mercado']}** (previsto {a['confianca']}%)")
-                            else:
-                                st.caption(f"⏳ {a['nome_categoria']}: sem estatística de partida coletada ainda")
+                if filtro_exibicao == "Só pendentes" and encerrado:
+                    pendentes_ocultados += 1
+                    continue
 
-                        relatorio = gerar_relatorio_partida(avaliacoes, p['time_casa'], p['time_fora'])
-                        st.info(f"📋 {relatorio}")
-                else:
-                    st.caption("⏳ Jogo ainda não encerrado (ou sem placar salvo).")
+                with st.expander(f"{p['time_casa']} x {p['time_fora']} — {p.get('data','')}"):
+                    st.write(f"Vitória {p['time_casa']}: {p['prob_casa']}% | Empate: {p['prob_empate']}% | Vitória {p['time_fora']}: {p['prob_fora']}%")
+                    st.write(f"Ambas Marcam: {p['prob_btts']}% | Gols >1.5: {p['over15_ft']}% | Gols >2.5: {p['over25_ft']}%")
+                    st.write(f"Escanteios: média {p['cantos_ft']} | linha {p['linha_cantos']} | over: {p['prob_over_cantos']}%")
+                    st.write(f"Cartões: média {p['cartoes_ft']} | linha {p['linha_cartoes']} | over: {p['prob_over_cartoes']}%")
+                    st.write(f"Placar mais provável: {p['placar_mais_provavel']}")
 
-        if pendentes_ocultados:
-            st.caption(f"({pendentes_ocultados} previsão(ões) já encerrada(s) oculta(s) — nada foi apagado, "
-                       f"muda pra 'Tudo' acima pra ver. Todas continuam contando pro Bingo e pro ROI.)")
+                    multiplas_salvas = json.loads(p["multiplas_json"]) if p.get("multiplas_json") else []
+                    if multiplas_salvas:
+                        st.markdown("**Múltiplas geradas nessa previsão:**")
+                        for m in multiplas_salvas:
+                            pernas_txt = " + ".join(f"{leg['nome']} ({leg['prob']:.1f}%)" for leg in m["pernas"])
+                            st.caption(f"{m['titulo']}: {pernas_txt} → combinada {m['prob_combinada']}%")
+
+                    jogo_real = supabase.table(f"jogos{SUFIXO}").select("gols_casa,gols_fora,status") \
+                        .eq("casa_nome", p['time_casa']).eq("fora_nome", p['time_fora']) \
+                        .eq("data", p['data']).execute().data
+                    if jogo_real and jogo_real[0].get("status") == "encerrado":
+                        gc, gf = jogo_real[0]["gols_casa"], jogo_real[0]["gols_fora"]
+                        st.success(f"✅ Resultado real: {p['time_casa']} {gc} x {gf} {p['time_fora']}")
+
+                        avaliacoes = avaliar_mercados_previstos(
+                            p.get("mercados_json"), p['time_casa'], p['time_fora'], p['data'], sufixo_liga=SUFIXO
+                        )
+                        if avaliacoes:
+                            st.markdown("**Mercados previstos x resultado real:**")
+                            for a in avaliacoes:
+                                if a["acerto"] is True:
+                                    st.markdown(f"✅ {a['nome_categoria']}: **{a['mercado']}** (previsto {a['confianca']}%)")
+                                elif a["acerto"] is False:
+                                    st.markdown(f"❌ {a['nome_categoria']}: **{a['mercado']}** (previsto {a['confianca']}%)")
+                                else:
+                                    st.caption(f"⏳ {a['nome_categoria']}: sem estatística de partida coletada ainda")
+
+                            relatorio = gerar_relatorio_partida(avaliacoes, p['time_casa'], p['time_fora'])
+                            st.info(f"📋 {relatorio}")
+                    else:
+                        st.caption("⏳ Jogo ainda não encerrado (ou sem placar salvo).")
+
+            if pendentes_ocultados:
+                st.caption(f"({pendentes_ocultados} previsão(ões) já encerrada(s) oculta(s) — nada foi apagado, "
+                           f"muda pra 'Tudo' acima pra ver. Todas continuam contando pro Bingo e pro ROI.)")
 
 with aba_banca:
     st.subheader("🏦 Controle de Banca")
