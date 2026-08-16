@@ -55,8 +55,18 @@ def buscar_apostas(status: str = None, liga: str = None, limite: int = 100) -> l
 def atualizar_resultado_aposta(aposta_id: int, ganhou: bool, retorno_manual: float = None) -> bool:
     """
     Marca a aposta como ganha/perdida e calcula o retorno automaticamente
-    (stake*odd se ganhou, -stake se perdeu) — a menos que retorno_manual
-    seja informado (ex: perna anulada mudou o valor real do pagamento).
+    — a menos que retorno_manual seja informado (ex: perna anulada mudou
+    o valor real do pagamento).
+
+    CORREÇÃO 15/08/2026 (bug confirmado — dobrava o prejuízo no ROI):
+    'retorno' representa o dinheiro que efetivamente volta pra conta,
+    não o lucro/prejuízo da aposta. Se ganhou, é stake*odd (o pagamento
+    bruto, já incluindo o valor apostado de volta). Se perdeu, é 0 —
+    nada volta. O cálculo de lucro (calcular_roi/buscar_evolucao_lucro)
+    já faz retorno - investido pra chegar no líquido; usar retorno=-stake
+    numa derrota fazia esse -stake ser subtraído DUAS vezes (uma dentro
+    do próprio retorno negativo, outra pelo investido), dobrando cada
+    prejuízo no ROI exibido.
     """
     try:
         aposta = supabase.table("apostas").select("stake,odd").eq("id", aposta_id).execute().data
@@ -67,7 +77,7 @@ def atualizar_resultado_aposta(aposta_id: int, ganhou: bool, retorno_manual: flo
         if retorno_manual is not None:
             retorno = retorno_manual
         else:
-            retorno = round(stake * odd, 2) if ganhou else round(-stake, 2)
+            retorno = round(stake * odd, 2) if ganhou else 0.0
 
         supabase.table("apostas").update({
             "status": "ganhou" if ganhou else "perdeu",
