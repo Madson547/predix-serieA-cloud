@@ -145,7 +145,7 @@ def analisar_confronto(casa, fora, data_jogo=None, sufixo_liga=""):
     return resultado
 
 
-def montar_mercados(resultado, casa, fora):
+def montar_mercados(resultado, casa, fora, sufixo_liga=""):
     """
     Um mercado por categoria (evita combinar mercados redundantes ou
     contraditórios, tipo 'Mais de 1.5' com 'Mais de 2.5' na mesma múltipla).
@@ -241,15 +241,21 @@ def montar_mercados(resultado, casa, fora):
         mercados["chutes_gol_fora"] = {"tipo": "chutes_gol_fora", "nome": f"Menos de {resultado.linha_chutes_gol_fora} Chutes no Gol ({fora})", "prob": 100 - resultado.prob_over_chutes_gol_fora, "linha": resultado.linha_chutes_gol_fora, "direcao": "menos"}
 
     # Faltas — por time, mesmo padrão de chutes/escanteios.
-    if resultado.prob_over_faltas_casa >= 50:
-        mercados["faltas_casa"] = {"tipo": "faltas_casa", "nome": f"Mais de {resultado.linha_faltas_casa} Faltas ({casa})", "prob": resultado.prob_over_faltas_casa, "linha": resultado.linha_faltas_casa, "direcao": "mais"}
-    else:
-        mercados["faltas_casa"] = {"tipo": "faltas_casa", "nome": f"Menos de {resultado.linha_faltas_casa} Faltas ({casa})", "prob": 100 - resultado.prob_over_faltas_casa, "linha": resultado.linha_faltas_casa, "direcao": "menos"}
+    # EXCLUÍDO DA SÉRIE B (15/08/2026): a Betano não oferece mercado de
+    # Faltas para o Brasileirão Série B — sugerir esse mercado lá gerava
+    # apostas não realizáveis na casa (além de, à parte disso, a linha
+    # também estar instável por amostra pequena, ver achado 14/08/2026).
+    # Continua normal na Série A, onde a Betano oferece o mercado.
+    if sufixo_liga != "_b":
+        if resultado.prob_over_faltas_casa >= 50:
+            mercados["faltas_casa"] = {"tipo": "faltas_casa", "nome": f"Mais de {resultado.linha_faltas_casa} Faltas ({casa})", "prob": resultado.prob_over_faltas_casa, "linha": resultado.linha_faltas_casa, "direcao": "mais"}
+        else:
+            mercados["faltas_casa"] = {"tipo": "faltas_casa", "nome": f"Menos de {resultado.linha_faltas_casa} Faltas ({casa})", "prob": 100 - resultado.prob_over_faltas_casa, "linha": resultado.linha_faltas_casa, "direcao": "menos"}
 
-    if resultado.prob_over_faltas_fora >= 50:
-        mercados["faltas_fora"] = {"tipo": "faltas_fora", "nome": f"Mais de {resultado.linha_faltas_fora} Faltas ({fora})", "prob": resultado.prob_over_faltas_fora, "linha": resultado.linha_faltas_fora, "direcao": "mais"}
-    else:
-        mercados["faltas_fora"] = {"tipo": "faltas_fora", "nome": f"Menos de {resultado.linha_faltas_fora} Faltas ({fora})", "prob": 100 - resultado.prob_over_faltas_fora, "linha": resultado.linha_faltas_fora, "direcao": "menos"}
+        if resultado.prob_over_faltas_fora >= 50:
+            mercados["faltas_fora"] = {"tipo": "faltas_fora", "nome": f"Mais de {resultado.linha_faltas_fora} Faltas ({fora})", "prob": resultado.prob_over_faltas_fora, "linha": resultado.linha_faltas_fora, "direcao": "mais"}
+        else:
+            mercados["faltas_fora"] = {"tipo": "faltas_fora", "nome": f"Menos de {resultado.linha_faltas_fora} Faltas ({fora})", "prob": 100 - resultado.prob_over_faltas_fora, "linha": resultado.linha_faltas_fora, "direcao": "menos"}
 
     return mercados
 
@@ -326,7 +332,7 @@ def gerar_multiplas(resultado, casa, fora, sufixo_liga=""):
     editar código de novo — e se ela virar confiável, sobe de tier
     automaticamente também.
     """
-    mercados = montar_mercados(resultado, casa, fora)
+    mercados = montar_mercados(resultado, casa, fora, sufixo_liga=sufixo_liga)
     classificacao, taxas = classificar_categorias_dinamico(sufixo_liga)
 
     combos = [
@@ -440,7 +446,7 @@ with aba_painel:
                     st.success(f"{medalha} **{item['mercado']}** — Confiança: {item['confianca']}%{odd_txt}")
 
                 if st.button("💾 Salvar previsão", key=f"salvar_{jogo['casa_nome']}_{jogo['fora_nome']}_{jogo.get('data','')}"):
-                    mercados_pra_salvar = montar_mercados(resultado, jogo['casa_nome'], jogo['fora_nome'])
+                    mercados_pra_salvar = montar_mercados(resultado, jogo['casa_nome'], jogo['fora_nome'], sufixo_liga=SUFIXO)
                     multiplas_pra_salvar = gerar_multiplas(resultado, jogo['casa_nome'], jogo['fora_nome'], sufixo_liga=SUFIXO)
                     if salvar_previsao(resultado, jogo['casa_nome'], jogo['fora_nome'], jogo.get('data'), top_3, multiplas_pra_salvar, mercados_pra_salvar, sufixo_liga=SUFIXO):
                         st.success("Previsão + mercados + múltiplas salvos! Confira depois nas abas 🎯 Bingo e 📈 Medidor de Desempenho.")
@@ -512,8 +518,12 @@ with aba_painel:
                 st.info(f"🎯 Chutes {jogo['fora_nome']}: média {resultado.chutes_fora} | Mais de {resultado.linha_chutes_fora}: {resultado.prob_over_chutes_fora}%")
                 st.success(f"🥅 Chutes no gol {jogo['casa_nome']}: média {resultado.chutes_gol_casa} | Mais de {resultado.linha_chutes_gol_casa}: {resultado.prob_over_chutes_gol_casa}%")
                 st.success(f"🥅 Chutes no gol {jogo['fora_nome']}: média {resultado.chutes_gol_fora} | Mais de {resultado.linha_chutes_gol_fora}: {resultado.prob_over_chutes_gol_fora}%")
-                st.warning(f"🟨 Faltas {jogo['casa_nome']}: média {resultado.faltas_casa} | Mais de {resultado.linha_faltas_casa}: {resultado.prob_over_faltas_casa}%")
-                st.warning(f"🟨 Faltas {jogo['fora_nome']}: média {resultado.faltas_fora} | Mais de {resultado.linha_faltas_fora}: {resultado.prob_over_faltas_fora}%")
+                # Faltas ocultado na Série B (15/08/2026) — Betano não oferece
+                # esse mercado para o Brasileirão Série B, não faz sentido
+                # exibir a previsão. Continua normal na Série A.
+                if SUFIXO != "_b":
+                    st.warning(f"🟨 Faltas {jogo['casa_nome']}: média {resultado.faltas_casa} | Mais de {resultado.linha_faltas_casa}: {resultado.prob_over_faltas_casa}%")
+                    st.warning(f"🟨 Faltas {jogo['fora_nome']}: média {resultado.faltas_fora} | Mais de {resultado.linha_faltas_fora}: {resultado.prob_over_faltas_fora}%")
                 st.info(f"🏆 Placar mais provável: **{resultado.placar_mais_provavel}**")
             else:
                 st.warning("Análise não disponível — time não encontrado no banco.")
