@@ -1,21 +1,34 @@
 # ==========================================================
 # Predix Série B — coletor_b.py
-# Adaptado do coletor.py da Série A (mesma lógica, mesma janela
-# de rodadas), gravando em tabelas separadas (times_b, jogos_b)
-# pra não misturar dado com o pipeline da Série A.
+# MIGRADO em 17/08/2026 da Dados Futebol pra API Futebol
+# (api-futebol.com.br), depois de dois casos documentados de
+# dado permanentemente corrompido/incompleto na fonte antiga
+# (Criciúma x Goiás id=3302, Sport x Cuiabá id=3283 — ambos
+# confirmados corretos na API Futebol via teste_api_futebol.py).
 #
-# DIFERENÇA-CHAVE: o CAMPEONATO_ID não é fixo aqui. A API não
-# documenta uma lista estática de IDs (são gerados no banco dela
-# e podem mudar de temporada pra temporada), então descobrimos o
-# ID certo em tempo de execução buscando por nome em /v1/campeonatos
-# — evita chutar um número errado e também sobrevive caso a API
-# renumere os campeonatos no futuro.
+# TABELAS NO SUPABASE NÃO MUDARAM (jogos_b, times_b,
+# estatisticas_partidas_b) — mesmo schema de antes, então
+# app.py e diagnostico.py não precisam de nenhuma alteração.
+#
+# MUDANÇA DE ARQUITETURA: a Dados Futebol exigia gerenciar uma
+# "janela de rodadas" pra saber quais jogos revisitar — isso já
+# causou pelo menos 2 bugs de detecção de rodada no passado. A
+# API Futebol devolve a temporada inteira (380 jogos) numa única
+# chamada, incluindo status de cada partida. Por isso trocamos
+# pra uma JANELA DE DATAS (hoje ± N dias) — mais simples, sem
+# depender de detectar "qual rodada está em andamento".
+#
+# IMPORTANTE — VERSÃO NOVA, AINDA NÃO VALIDADA EM PRODUÇÃO:
+# esse arquivo nunca rodou de verdade contra o cron real. Rode
+# primeiro via workflow_dispatch manual e confira o log com
+# calma antes de deixar no cron automático — é esperado que
+# apareçam ajustes, do mesmo jeito que aconteceu quando a Dados
+# Futebol foi debugada ao longo de várias sessões.
 # ==========================================================
 
 import os
-import re
 import time
-from datetime import datetime
+from datetime import datetime, date, timedelta
 import requests
 from dotenv import load_dotenv
 from bs4 import BeautifulSoup
@@ -24,111 +37,91 @@ from database import supabase
 
 load_dotenv()
 
-DADOS_FUTEBOL_KEY = os.getenv("DADOS_FUTEBOL_KEY")
-BASE_URL = "https://api.dadosfutebol.com.br/v1"
-CAMPEONATO_NOME_BUSCA = "série b"  # usado pra localizar o campeonato certo por nome
+API_FUTEBOL_KEY = os.getenv("API_FUTEBOL_KEY")
+BASE_URL = "https://api.api-futebol.com.br/v1"
+
+# Confirmado via teste_api_futebol.py em 17/08/2026 — respondeu 200 com a
+# tabela real da Série B (Criciúma no topo). Diferente da Dados Futebol,
+# esse ID parece ser fixo pra competição (não muda por temporada — a
+# temporada fica dentro de "edicao", aninhada no mesmo campeonato_id).
+CAMPEONATO_ID_SERIE_B = 14
+
 TABELA_JOGOS = "jogos_b"
 TABELA_TIMES = "times_b"
 TABELA_ESTATISTICAS_PARTIDAS = "estatisticas_partidas_b"
 
-_CAMPEONATO_ID_CACHE = None  # preenchido na primeira chamada de _campeonato_id()
+# Janela de datas processada a cada execução — jogos fora dessa janela não
+# são tocados (nem revisitados, nem re-salvos). Passado curto o suficiente
+# pra não gastar cota da API à toa reprocessando jogos antigos que não vão
+# mudar mais; futuro suficiente pra alimentar a tela de "próximos jogos".
+JANELA_DIAS_PASSADOS = 10
+JANELA_DIAS_FUTUROS = 15
 
-
-def _normalizar_data(data_str: str) -> str | None:
-    """
-    A API devolve datas em formatos variados (ex: 'DD/MM/AAAA' ou já ISO).
-    O Postgres exige 'AAAA-MM-DD' — sem converter, dias >12 quebram o insert
-    (ex: '28/01/2026' é lido como mês=28, erro 22008).
-    """
-    if not data_str:
-        return None
-    data_str = data_str.strip()
-    for fmt in ("%d/%m/%Y", "%Y-%m-%d", "%Y-%m-%dT%H:%M:%S"):
-        try:
-            return datetime.strptime(data_str[:19] if "T" in fmt else data_str, fmt).strftime("%Y-%m-%d")
-        except ValueError:
-            continue
-    print(f"[AVISO] Formato de data não reconhecido: '{data_str}'")
-    return None
+# Mesmo piso/teto de sanidade que já usávamos com a Dados Futebol — mantido
+# como camada de defesa, mesmo a API Futebol tendo se mostrado mais
+# confiável nos 2 casos testados. Nunca é demais desconfiar de dado que
+# vem de fora, não importa a fonte.
+LIMITE_SANIDADE_CHUTES = 35
+LIMITE_SANIDADE_CHUTES_GOL = 20
+MINIMO_SANIDADE_CHUTES = 5
+MINIMO_SANIDADE_FALTAS = 3
 
 
 def _headers():
-    return {
-        "Authorization": f"Bearer {DADOS_FUTEBOL_KEY}",
-        "Accept": "application/json",
-    }
+    return {"Authorization": f"Bearer {API_FUTEBOL_KEY}", "Accept": "application/json"}
 
 
-def _get(endpoint: str, params: dict = None) -> dict:
+def _get(endpoint, params=None):
+    """Retorna (status_code, corpo_json). Nunca lança exceção pra chamador
+    — quem chama decide o que fazer com status != 200."""
     try:
-        resp = requests.get(f"{BASE_URL}{endpoint}", headers=_headers(), params=params, timeout=15)
-        resp.raise_for_status()
-        return resp.json()
+        resp = requests.get(f"{BASE_URL}{endpoint}", headers=_headers(), params=params, timeout=20)
     except requests.RequestException as e:
         print(f"[ERRO API] {endpoint}: {e}")
-        return {}
+        return None, {}
+    try:
+        corpo = resp.json()
+    except Exception:
+        corpo = {}
+    return resp.status_code, corpo
 
 
-def _campeonato_id() -> int | None:
-    """
-    Descobre (e cacheia em memória, só durante a execução do processo) o ID
-    numérico do campeonato "Série B" da temporada atual, buscando por nome
-    em /v1/campeonatos em vez de depender de um número fixo. Casa por
-    'nome', 'nome_popular' ou 'slug' contendo "série b"/"serie-b" — a API
-    normaliza acentos de forma inconsistente entre esses três campos, então
-    checamos os três.
-    """
-    global _CAMPEONATO_ID_CACHE
-    if _CAMPEONATO_ID_CACHE is not None:
-        return _CAMPEONATO_ID_CACHE
-
-    ano_atual = datetime.now().strftime("%Y")
-    data = _get("/campeonatos", params={"temporada": ano_atual})
-    campeonatos = data.get("data", [])
-
-    for c in campeonatos:
-        candidatos_nome = [
-            (c.get("nome") or "").lower(),
-            (c.get("nome_popular") or "").lower(),
-            (c.get("slug") or "").lower(),
-        ]
-        if any("série b" in n or "serie b" in n or "serie-b" in n for n in candidatos_nome):
-            _CAMPEONATO_ID_CACHE = c.get("id")
-            print(f"[API] Campeonato Série B identificado: id={_CAMPEONATO_ID_CACHE} "
-                  f"(nome='{c.get('nome')}')")
-            return _CAMPEONATO_ID_CACHE
-
-    print(f"[ERRO] Não encontrei 'Série B' na lista de campeonatos da temporada {ano_atual}. "
-          f"Campeonatos disponíveis: {[c.get('nome') for c in campeonatos]}")
-    return None
+def _normalizar_data(data_str: str):
+    """API Futebol devolve 'DD/MM/AAAA'. Postgres exige 'AAAA-MM-DD'."""
+    if not data_str:
+        return None
+    try:
+        return datetime.strptime(data_str.strip(), "%d/%m/%Y").strftime("%Y-%m-%d")
+    except ValueError:
+        print(f"[AVISO] Formato de data não reconhecido: '{data_str}'")
+        return None
 
 
 # ==========================================================
-# TABELA -> tabela "times"
+# TABELA -> tabela "times_b"
 # ==========================================================
 
 def buscar_tabela() -> list:
-    cid = _campeonato_id()
-    if cid is None:
+    status, data = _get(f"/campeonatos/{CAMPEONATO_ID_SERIE_B}/tabela")
+    if status != 200:
+        print(f"[ERRO] /campeonatos/{CAMPEONATO_ID_SERIE_B}/tabela retornou status {status}")
         return []
-    data = _get(f"/campeonatos/{cid}/tabela")
-    classificacao = data.get("data", {}).get("classificacao", [])
+
+    linhas = data if isinstance(data, list) else data.get("data", [])
     times = []
-    for entry in classificacao:
+    for entry in linhas:
         time_info = entry.get("time", {})
-        gp = entry.get("gols_pro", 0)
-        gc = entry.get("gols_contra", 0)
         times.append({
-            "nome":    time_info.get("nome_popular") or time_info.get("nome", ""),
+            "nome":    time_info.get("nome_popular", ""),
             "posicao": entry.get("posicao"),
             "pts":     entry.get("pontos", 0),
             "j":       entry.get("jogos", 0),
             "v":       entry.get("vitorias", 0),
             "e":       entry.get("empates", 0),
             "d":       entry.get("derrotas", 0),
-            "gm":      gp,
-            "gc":      gc,
-            "sg":      entry.get("saldo_gols", gp - gc),
+            "gm":      entry.get("gols_pro", 0),
+            "gc":      entry.get("gols_contra", 0),
+            "sg":      entry.get("saldo_gols", 0),
         })
     print(f"[API] Tabela: {len(times)} times")
     return times
@@ -151,162 +144,117 @@ def salvar_times(times: list):
 
 
 # ==========================================================
-# RODADA ATUAL
+# PARTIDAS DA TEMPORADA (resumo, sem estatística) — busca tudo
+# de uma vez, extração recursiva pra sobreviver a qualquer
+# formato de aninhamento que a API usar (confirmado com
+# teste_api_futebol.py: a resposta vem aninhada, não como lista
+# plana — a extração recursiva por 'time_mandante'+'time_visitante'
+# já se mostrou robusta a isso).
 # ==========================================================
 
-def _numero_da_rodada(rodada: dict):
-    """
-    A API tem um 'id' interno (ex: 176) que NÃO é o número da rodada.
-    O número real geralmente vem no campo 'rodada_numero'/'numero', ou
-    pode ser extraído do nome (ex: '4ª Rodada' -> 4).
-    """
-    for campo in ("rodada_numero", "numero", "rodada"):
-        val = rodada.get(campo)
-        if isinstance(val, int):
-            return val
-    nome = rodada.get("nome") or ""
-    m = re.search(r"(\d+)", nome)
-    if m:
-        return int(m.group(1))
-    return None
+def _extrair_partidas(obj):
+    encontradas = []
+    if isinstance(obj, dict):
+        if "time_mandante" in obj and "time_visitante" in obj and "partida_id" in obj:
+            encontradas.append(obj)
+        else:
+            for v in obj.values():
+                encontradas.extend(_extrair_partidas(v))
+    elif isinstance(obj, list):
+        for item in obj:
+            encontradas.extend(_extrair_partidas(item))
+    return encontradas
 
 
-def buscar_numero_rodada_atual() -> int | None:
-    """
-    Identifica a rodada atual do campeonato.
-
-    IMPORTANTE (bug confirmado em 2026-07 via diagnostico_rodada.py):
-    a API às vezes deixa uma rodada ANTIGA com status 'andamento'
-    desatualizado — ex: a "4ª Rodada" aparecia como 'andamento' mesmo
-    com as rodadas 5 a 18 já 'encerrada' depois dela (causa real: jogo
-    atrasado daquela rodada, tipo Bahia x Chapecoense). Se confiarmos
-    cegamente em status=='andamento', ficamos travados numa rodada
-    velha pra sempre.
-
-    Por isso a rodada atual é calculada como "a rodada seguinte à
-    última rodada encerrada, em sequência a partir da rodada 1" — não
-    depende da flag 'andamento' da API, só da sequência real de rodadas
-    já encerradas. Isso é resistente a esse tipo de flag desatualizada.
-    """
-    cid = _campeonato_id()
-    if cid is None:
-        return None
-    data = _get(f"/campeonatos/{cid}/rodadas")
-    rodadas = data.get("data", [])
-
-    numeradas = []
-    for r in rodadas:
-        numero = _numero_da_rodada(r)
-        status = (r.get("status") or "").lower()
-        if numero is not None:
-            numeradas.append((numero, status, r.get("nome")))
-
-    if not numeradas:
-        print("[API] Não foi possível identificar a rodada atual (sem dados numerados).")
-        return None
-
-    numeradas.sort(key=lambda item: item[0])
-
-    ultima_encerrada = 0
-    for numero, status, _ in numeradas:
-        if "encerrada" in status or "encerrado" in status:
-            ultima_encerrada = max(ultima_encerrada, numero)
-
-    candidato = ultima_encerrada + 1
-    if any(numero == candidato for numero, _, _ in numeradas):
-        print(f"[API] Rodada atual calculada: {candidato}ª Rodada (última encerrada: {ultima_encerrada}ª)")
-        return candidato
-
-    # Fallback: candidato não existe na lista por algum motivo — usa a
-    # primeira rodada 'agendada' encontrada.
-    for numero, status, nome in numeradas:
-        if "agendada" in status or "agendado" in status:
-            print(f"[API] Fallback — primeira rodada agendada encontrada: {nome}")
-            return numero
-
-    print("[API] Não foi possível identificar a rodada atual com segurança.")
-    return None
-
-
-# ==========================================================
-# PARTIDAS -> tabela "jogos"
-# ==========================================================
-
-def buscar_partidas() -> list:
-    """
-    CORREÇÃO (31/07/2026 — confirmado via consulta direta na tabela `jogos`):
-    buscar só a "rodada calculada como atual" tinha o mesmo problema que já
-    tínhamos corrigido em buscar_stats_por_time() — a API pode marcar uma
-    rodada como 'encerrada' antes de TODOS os jogos dela realmente
-    terminarem (jogo atrasado/remarcado no meio da rodada). Quando isso
-    acontece, buscar_numero_rodada_atual() pula pra rodada seguinte e a
-    rodada anterior — com jogos que ainda estavam 'agendado' no nosso
-    banco — nunca mais é revisitada. Resultado confirmado: 10 jogos
-    ficaram travados em status='agendado' desde 28/07, mesmo depois de
-    vários já terem sido encerrados de verdade (ex: Coritiba x Cruzeiro,
-    Corinthians x Athletico Paranaense).
-
-    Agora busca uma JANELA de rodadas (atual + 2 anteriores), igual ao
-    princípio já usado em buscar_stats_por_time() — assim qualquer jogo
-    "esquecido" numa rodada anterior é reprocessado e tem status/placar
-    atualizados nas próximas execuções do coletor.
-    """
-    cid = _campeonato_id()
-    if cid is None:
+def buscar_resumo_temporada() -> list:
+    status, data = _get(f"/campeonatos/{CAMPEONATO_ID_SERIE_B}/partidas")
+    if status != 200:
+        print(f"[ERRO] /campeonatos/{CAMPEONATO_ID_SERIE_B}/partidas retornou status {status}")
         return []
+    partidas = _extrair_partidas(data)
+    print(f"[API] Partidas na temporada inteira: {len(partidas)}")
+    return partidas
 
-    numero_rodada = buscar_numero_rodada_atual()
-    rodadas = list(range(max(1, numero_rodada - 2), numero_rodada + 1)) if numero_rodada else None
 
-    partidas_raw = []
-    vistos = set()
+def buscar_detalhe_partida(partida_id: int) -> dict | None:
+    status, data = _get(f"/partidas/{partida_id}")
+    if status != 200:
+        print(f"[ERRO] /partidas/{partida_id} retornou status {status}")
+        return None
+    return data
 
-    if rodadas:
-        for r in rodadas:
-            data = _get(f"/campeonatos/{cid}/partidas", params={"rodada": r})
-            for p in data.get("data", []):
-                pid = p.get("id")
-                if pid in vistos:
-                    continue  # evita duplicar caso a mesma partida apareça em mais de uma rodada consultada
-                vistos.add(pid)
-                partidas_raw.append(p)
-            time.sleep(0.2)
-        print(f"[API] Janela de rodadas consultada: {rodadas}")
-    else:
-        data = _get(f"/campeonatos/{cid}/partidas")
-        partidas_raw = data.get("data", [])
 
-    # Fallback: se a janela toda não trouxer nada, tenta sem filtro
-    if not partidas_raw:
-        print("[API] Nada nas rodadas filtradas, tentando sem filtro...")
-        data = _get(f"/campeonatos/{cid}/partidas")
-        partidas_raw = data.get("data", [])
+# ==========================================================
+# SANIDADE — mesmo padrão já usado com a Dados Futebol
+# ==========================================================
 
-    jogos = []
-    for p in partidas_raw:
-        mandante  = p.get("time_mandante", {})
-        visitante = p.get("time_visitante", {})
-        nome_m = (mandante.get("nome_popular") or mandante.get("nome", "")) if isinstance(mandante, dict) else str(mandante)
-        nome_v = (visitante.get("nome_popular") or visitante.get("nome", "")) if isinstance(visitante, dict) else str(visitante)
+def _aplicar_teto_piso(valor, minimo, maximo, nome_time, rotulo, pid):
+    if valor is None:
+        return None
+    if valor > maximo:
+        print(f"[AVISO] {nome_time}: {rotulo} suspeito ({valor}, acima do teto) na partida id={pid}, descartado")
+        return None
+    if valor < minimo:
+        print(f"[AVISO] {nome_time}: {rotulo} suspeito ({valor}, abaixo do piso) na partida id={pid}, descartado")
+        return None
+    return valor
 
-        gm = p.get("placar_mandante")
-        gv = p.get("placar_visitante")
-        status = "encerrado" if gm is not None and gv is not None else "agendado"
 
-        jogos.append({
-            "fixture_id":  p.get("id"),
-            "casa_nome":   nome_m,
-            "fora_nome":   nome_v,
-            "data":        _normalizar_data(p.get("data_realizacao", "")),
-            "hora":        p.get("hora_realizacao", ""),
-            "status":      status,
-            "status_desc": "Encerrado" if status == "encerrado" else "Agendado",
-            "gols_casa":   gm,
-            "gols_fora":   gv,
-        })
+def _parse_posse(valor_str):
+    """'40%' -> 40. Retorna None se não der pra converter."""
+    if not valor_str:
+        return None
+    try:
+        return int(str(valor_str).replace("%", "").strip())
+    except ValueError:
+        return None
 
-    print(f"[API] Partidas: {len(jogos)} encontradas")
-    return jogos
+
+def _lado_confiavel(bloco: dict) -> bool:
+    """Marca como não-confiável só quando o bloco vier ausente/vazio ou
+    com posse de bola fisicamente implausível — mesmo critério já usado
+    com a Dados Futebol (faixa alargada em 11/08/2026 pra 3-97%)."""
+    if not bloco:
+        return False
+    posse = _parse_posse(bloco.get("posse_de_bola"))
+    if posse is not None and not (3 <= posse <= 97):
+        return False
+    return True
+
+
+# ==========================================================
+# SALVAR ESTATÍSTICA REAL DA PARTIDA -> estatisticas_partidas_b
+# (mesma tabela/schema de antes — reaproveitado sem mudança)
+# ==========================================================
+
+def salvar_estatisticas_partida(
+    fixture_id, casa_nome, fora_nome, data_jogo,
+    escanteios_casa, escanteios_fora, cartoes_casa, cartoes_fora,
+    chutes_casa, chutes_fora, chutes_gol_casa, chutes_gol_fora,
+    faltas_casa, faltas_fora,
+):
+    if not fixture_id:
+        return
+    try:
+        supabase.table(TABELA_ESTATISTICAS_PARTIDAS).upsert({
+            "fixture_id": fixture_id,
+            "casa_nome": casa_nome,
+            "fora_nome": fora_nome,
+            "data": data_jogo,
+            "escanteios_casa": escanteios_casa,
+            "escanteios_fora": escanteios_fora,
+            "cartoes_casa": cartoes_casa,
+            "cartoes_fora": cartoes_fora,
+            "chutes_casa": chutes_casa,
+            "chutes_fora": chutes_fora,
+            "chutes_gol_casa": chutes_gol_casa,
+            "chutes_gol_fora": chutes_gol_fora,
+            "faltas_casa": faltas_casa,
+            "faltas_fora": faltas_fora,
+            "data_atualizacao": datetime.now().isoformat(),
+        }, on_conflict="fixture_id").execute()
+    except Exception as e:
+        print(f"[ERRO] salvar_estatisticas_partida (fixture_id={fixture_id}): {e}")
 
 
 def salvar_jogos(jogos: list):
@@ -332,251 +280,135 @@ def salvar_jogos(jogos: list):
     print(f"[JOGOS] {salvos} partidas salvas/atualizadas.")
 
 
-# ==========================================================
-# ESTATÍSTICAS DE FINALIZAÇÕES -> tabela "times" (eficiência)
-# ==========================================================
-
-def _media(lista: list, fallback: float = 0.0) -> float:
+def _media(lista, fallback=0.0):
     return round(sum(lista) / len(lista), 2) if lista else fallback
 
 
-def salvar_estatisticas_partida(
-    fixture_id, casa_nome, fora_nome, data_jogo,
-    escanteios_casa, escanteios_fora, cartoes_casa, cartoes_fora,
-    chutes_casa, chutes_fora, chutes_gol_casa, chutes_gol_fora,
-    faltas_casa, faltas_fora,
-):
+# ==========================================================
+# PROCESSAMENTO PRINCIPAL — janela de datas
+# ==========================================================
+
+def processar_janela():
     """
-    Grava (upsert por fixture_id) o valor REAL de escanteios/cartões/
-    chutes/faltas daquela partida específica — não a média móvel do
-    time. Mesma lógica do coletor.py (Série A), apontando pra
-    estatisticas_partidas_b.
+    Busca o resumo da temporada inteira (1 chamada), filtra só os jogos
+    dentro da janela de datas (hoje ± N dias), e:
+      - Jogos futuros/agendados: salva em jogos_b com o que já vem no
+        resumo (sem chamada extra).
+      - Jogos já encerrados: busca o detalhe completo (1 chamada por jogo),
+        salva placar real em jogos_b, estatística real em
+        estatisticas_partidas_b, e acumula pra recalcular a média por time
+        em times_b.
     """
-    if not fixture_id:
+    resumo = buscar_resumo_temporada()
+    if not resumo:
         return
-    try:
-        supabase.table(TABELA_ESTATISTICAS_PARTIDAS).upsert({
-            "fixture_id": fixture_id,
-            "casa_nome": casa_nome,
-            "fora_nome": fora_nome,
-            "data": data_jogo,
-            # CORREÇÃO 11/08/2026: era "valor or None", que apagava
-            # estatísticas REAIS (ex: escanteios_casa=0.0 virava NULL,
-            # já que 0.0 é falsy em Python). Os valores já chegam None
-            # corretamente quando o lado não é confiável (_lado_confiavel);
-            # não precisa (nem pode) reforçar isso aqui — isso explicava
-            # jogos como Athletic-MG x Criciúma (id=3288) ficarem com
-            # escanteios/cartões NULL mesmo tendo passado no filtro de
-            # confiabilidade.
-            "escanteios_casa": escanteios_casa,
-            "escanteios_fora": escanteios_fora,
-            "cartoes_casa": cartoes_casa,
-            "cartoes_fora": cartoes_fora,
-            "chutes_casa": chutes_casa,
-            "chutes_fora": chutes_fora,
-            "chutes_gol_casa": chutes_gol_casa,
-            "chutes_gol_fora": chutes_gol_fora,
-            "faltas_casa": faltas_casa,
-            "faltas_fora": faltas_fora,
-            "data_atualizacao": datetime.now().isoformat(),
-        }, on_conflict="fixture_id").execute()
-    except Exception as e:
-        print(f"[ERRO] salvar_estatisticas_partida (fixture_id={fixture_id}): {e}")
 
+    hoje = date.today()
+    inicio = hoje - timedelta(days=JANELA_DIAS_PASSADOS)
+    fim = hoje + timedelta(days=JANELA_DIAS_FUTUROS)
 
-def buscar_stats_por_time(rodadas: list[int] | None = None) -> dict:
-    """
-    Percorre as partidas das rodadas selecionadas e calcula, por time
-    (casa/fora): médias de finalizações, finalizações no gol, escanteios
-    e cartões amarelos. Faz uma chamada de API por partida (com
-    estatísticas) — cada rodada processada consome ~10 chamadas extras.
+    jogos_pra_salvar = []
+    stats_por_time = {}
+    processados_encerrados = 0
+    sem_dado_esc_cart = []
 
-    CORREÇÃO 1 (26/07/2026 — diagnosticado via diagnostico_campos_api.py):
-    o JSON real da API vem como data -> estatisticas -> mandante/visitante,
-    não data -> mandante/visitante direto. Faltava o nível intermediário
-    "estatisticas", então est_m/est_v SEMPRE vinham vazios ({}), e todo
-    campo (chutes, chutes no gol, cartões — escanteios também, na prática)
-    caía no fallback fixo do poisson.py (11.0/9.5/4.0/3.3/2.2/2.3). Também
-    corrigido o nome do campo de finalizações: é "finalizacoes_total", não
-    "finalizacoes"/"chutes"/"shots".
-
-    CORREÇÃO 2 (26/07/2026 — diagnosticado via teste_stats_isolado.py):
-    a chamada SEM filtro de rodada (`/campeonatos/{id}/partidas`) só
-    devolve um lote fixo de ~15-20 partidas ANTIGAS (jan/fev, início da
-    temporada) — nunca as rodadas atuais. Por isso a função agora busca
-    partida por partida, RODADA POR RODADA (`?rodada=N`), do mesmo jeito
-    que buscar_partidas() já faz pra pegar a rodada atual.
-
-    Args:
-        rodadas: lista de números de rodada a processar.
-            - None (padrão) = modo INCREMENTAL: só as últimas 4 rodadas
-              a partir da atual. Pensado pra rodar automaticamente todo
-              dia sem gastar cota da API refazendo jogos antigos que já
-              não mudam mais.
-            - lista explícita (ex: list(range(1, 21))) = modo BACKFILL:
-              processa exatamente essas rodadas. Usado uma única vez pelo
-              backfill_stats_completo.py pra preencher o histórico inteiro.
-
-    NOTA: mesmo com as correções, "cartoes_amarelos" pode vir null da
-    própria API em algumas partidas (confirmado no JSON bruto) — isso é
-    limitação de dado da fonte, não bug nosso. O código já trata isso
-    corretamente (só adiciona à lista se o valor for > 0), então partidas
-    sem esse dado simplesmente não entram na média, em vez de contaminar
-    com zero falso.
-    """
-    cid = _campeonato_id()
-    if cid is None:
-        return {}
-
-    if rodadas is None:
-        rodada_atual = buscar_numero_rodada_atual() or 1
-        rodadas = list(range(max(1, rodada_atual - 3), rodada_atual + 1))
-        print(f"[STATS] Modo incremental — processando rodadas {rodadas}")
-    else:
-        print(f"[STATS] Modo backfill — processando {len(rodadas)} rodada(s): {rodadas}")
-
-    partidas = []
-    for rodada in rodadas:
-        data = _get(f"/campeonatos/{cid}/partidas", params={"rodada": rodada})
-        partidas_rodada = data.get("data", [])
-        # Só partidas já encerradas têm estatística disponível — pular
-        # jogos futuros evita chamada desperdiçada.
-        encerradas_rodada = [
-            p for p in partidas_rodada
-            if p.get("placar_mandante") is not None and p.get("placar_visitante") is not None
-        ]
-        partidas.extend(encerradas_rodada)
-        time.sleep(0.2)
-
-    print(f"[STATS] {len(partidas)} partida(s) encerrada(s) encontrada(s) nas rodadas selecionadas")
-
-    stats = {}
-    for p in partidas:
-        mandante  = p.get("time_mandante", {})
-        visitante = p.get("time_visitante", {})
-        nome_m = (mandante.get("nome_popular") or mandante.get("nome", "")) if isinstance(mandante, dict) else ""
-        nome_v = (visitante.get("nome_popular") or visitante.get("nome", "")) if isinstance(visitante, dict) else ""
-        if not nome_m or not nome_v:
+    for p in resumo:
+        data_iso = _normalizar_data(p.get("data_realizacao"))
+        if not data_iso:
+            continue
+        try:
+            data_dt = datetime.strptime(data_iso, "%Y-%m-%d").date()
+        except ValueError:
+            continue
+        if not (inicio <= data_dt <= fim):
             continue
 
-        for nome in (nome_m, nome_v):
-            stats.setdefault(nome, {
-                "finalizacoes_casa": [], "finalizacoes_fora": [],
-                "finalizacoes_gol_casa": [], "finalizacoes_gol_fora": [],
+        partida_id = p.get("partida_id")
+        casa_nome = p.get("time_mandante", {}).get("nome_popular", "")
+        fora_nome = p.get("time_visitante", {}).get("nome_popular", "")
+        status_raw = p.get("status")
+        finalizado = status_raw == "finalizado"
+
+        for nome in (casa_nome, fora_nome):
+            stats_por_time.setdefault(nome, {
                 "escanteios_casa": [], "escanteios_fora": [],
                 "cartoes_casa": [], "cartoes_fora": [],
+                "chutes_casa": [], "chutes_fora": [],
+                "chutes_gol_casa": [], "chutes_gol_fora": [],
                 "faltas_casa": [], "faltas_fora": [],
             })
 
-        pid = p.get("id")
-        if not pid:
+        if not finalizado:
+            jogos_pra_salvar.append({
+                "fixture_id":  partida_id,
+                "casa_nome":   casa_nome,
+                "fora_nome":   fora_nome,
+                "data":        data_iso,
+                "hora":        p.get("hora_realizacao", ""),
+                "status":      "agendado",
+                "status_desc": "Agendado",
+                "gols_casa":   None,
+                "gols_fora":   None,
+            })
             continue
 
-        est_data = _get(f"/partidas/{pid}/estatisticas")
-        time.sleep(0.3)
-
-        # CORREÇÃO 1: nível "estatisticas" estava faltando na leitura.
-        # Estrutura real: {"data": {"estatisticas": {"mandante": {...}, "visitante": {...}}}}
-        est_raiz = est_data.get("data", {})
-        est = est_raiz.get("estatisticas", {})
-        if not est:
+        # Jogo encerrado -> busca detalhe completo (placar + estatística real)
+        detalhe = buscar_detalhe_partida(partida_id)
+        time.sleep(0.2)
+        if not detalhe:
             continue
+        processados_encerrados += 1
 
+        gols_casa = detalhe.get("placar_mandante")
+        gols_fora = detalhe.get("placar_visitante")
+
+        jogos_pra_salvar.append({
+            "fixture_id":  partida_id,
+            "casa_nome":   casa_nome,
+            "fora_nome":   fora_nome,
+            "data":        data_iso,
+            "hora":        p.get("hora_realizacao", ""),
+            "status":      "encerrado",
+            "status_desc": "Encerrado",
+            "gols_casa":   gols_casa,
+            "gols_fora":   gols_fora,
+        })
+
+        est = detalhe.get("estatisticas", {})
         est_m = est.get("mandante", {})
         est_v = est.get("visitante", {})
-
-        # SANIDADE (07/08/2026 — confirmado via debug: partida id=3281 devolveu
-        # posse_bola=84% e SEM o bloco "visitante" inteiro, SEMANAS depois do
-        # jogo já ter terminado. Não é timing da nossa coleta — o provedor
-        # devolve um snapshot parcial/travado pra essa partida específica.
-        # O sinal mais forte de "foto do início do jogo" é o bloco de um dos
-        # lados vir ausente (checado abaixo). A posse isolada só reprova
-        # valores fisicamente implausíveis.
-        #
-        # AJUSTE 11/08/2026 — confirmado via SQL: a faixa 15-85% estava
-        # descartando dado REAL de jogos com domínio de posse extremo mas
-        # legítimo (Goiás 88% x Londrina 12%, ambos os blocos presentes e
-        # complementares — não é captura parcial, é só um jogo desigual).
-        # Faixa alargada pra 3-97%, que ainda pega valores fisicamente
-        # implausíveis (tipo 99x1) sem descartar domínio real.
-        def _lado_confiavel(bloco: dict) -> bool:
-            if not bloco:
-                return False
-            posse = bloco.get("posse_bola")
-            if posse is not None and not (3 <= posse <= 97):
-                return False
-            return True
 
         m_confiavel = _lado_confiavel(est_m)
         v_confiavel = _lado_confiavel(est_v)
         if not m_confiavel:
-            print(f"[AVISO] {nome_m}: dado suspeito/ausente na partida id={pid} "
-                  f"(posse_bola={est_m.get('posse_bola')}), tratando como sem dado")
+            print(f"[AVISO] {casa_nome}: bloco de estatística ausente/suspeito na partida id={partida_id}")
         if not v_confiavel:
-            print(f"[AVISO] {nome_v}: dado suspeito/ausente na partida id={pid} "
-                  f"(posse_bola={est_v.get('posse_bola')}), tratando como sem dado")
+            print(f"[AVISO] {fora_nome}: bloco de estatística ausente/suspeito na partida id={partida_id}")
 
-        # CORREÇÃO: nome real do campo é "finalizacoes_total".
-        fin_m  = (float(est_m.get("finalizacoes_total") or est_m.get("finalizacoes")
-                        or est_m.get("chutes") or est_m.get("shots") or 0)) if m_confiavel else None
-        fin_v  = (float(est_v.get("finalizacoes_total") or est_v.get("finalizacoes")
-                        or est_v.get("chutes") or est_v.get("shots") or 0)) if v_confiavel else None
-        fing_m = (float(est_m.get("finalizacoes_no_gol") or est_m.get("chutes_a_gol")
-                        or est_m.get("shots_on_target") or 0)) if m_confiavel else None
-        fing_v = (float(est_v.get("finalizacoes_no_gol") or est_v.get("chutes_a_gol")
-                        or est_v.get("shots_on_target") or 0)) if v_confiavel else None
-        esc_m  = (float(est_m.get("escanteios") or est_m.get("corners") or 0)) if m_confiavel else None
-        esc_v  = (float(est_v.get("escanteios") or est_v.get("corners") or 0)) if v_confiavel else None
-        cart_m = (float(est_m.get("cartoes_amarelos") or est_m.get("yellow_cards") or 0)) if m_confiavel else None
-        cart_v = (float(est_v.get("cartoes_amarelos") or est_v.get("yellow_cards") or 0)) if v_confiavel else None
-        falta_m = (float(est_m.get("faltas") or 0)) if m_confiavel else None
-        falta_v = (float(est_v.get("faltas") or 0)) if v_confiavel else None
+        esc_m = est_m.get("escanteios") if m_confiavel else None
+        esc_v = est_v.get("escanteios") if v_confiavel else None
+        falta_m = est_m.get("faltas") if m_confiavel else None
+        falta_v = est_v.get("faltas") if v_confiavel else None
+        fin_m = est_m.get("finalizacao", {}).get("total") if m_confiavel else None
+        fin_v = est_v.get("finalizacao", {}).get("total") if v_confiavel else None
+        fing_m = est_m.get("finalizacao", {}).get("no_gol") if m_confiavel else None
+        fing_v = est_v.get("finalizacao", {}).get("no_gol") if v_confiavel else None
 
-        # SANIDADE (28/07/2026 — outlier confirmado: Fluminense com fin_casa=25.0,
-        # quase o dobro do range real de ~9-18 chutes/jogo). Uma partida raramente
-        # passa de ~35 finalizações de um time só, ou ~20 no gol.
-        #
-        # PISO adicionado em 07/08/2026 — mesmo raciocínio, lado oposto: um jogo
-        # inteiro com <5 finalizações ou <3 faltas de um time é tão improvável
-        # quanto >35 — é a marca de dado capturado no início da partida.
-        LIMITE_SANIDADE_CHUTES = 35
-        LIMITE_SANIDADE_CHUTES_GOL = 20
-        MINIMO_SANIDADE_CHUTES = 5
-        MINIMO_SANIDADE_FALTAS = 3
+        cartoes = detalhe.get("cartoes", {}).get("amarelo", {})
+        cart_m = len(cartoes.get("mandante", [])) if m_confiavel else None
+        cart_v = len(cartoes.get("visitante", [])) if v_confiavel else None
 
-        def _aplicar_teto_piso(valor, minimo, maximo, nome_time, rotulo):
-            if valor is None:
-                return None
-            if valor > maximo:
-                print(f"[AVISO] {nome_time}: {rotulo} suspeito ({valor}, acima do teto) na partida id={pid}, descartado")
-                return None
-            if valor < minimo:
-                print(f"[AVISO] {nome_time}: {rotulo} suspeito ({valor}, abaixo do piso) na partida id={pid}, descartado")
-                return None
-            return valor
-
-        fin_m   = _aplicar_teto_piso(fin_m, MINIMO_SANIDADE_CHUTES, LIMITE_SANIDADE_CHUTES, nome_m, "finalizacoes_total")
-        fin_v   = _aplicar_teto_piso(fin_v, MINIMO_SANIDADE_CHUTES, LIMITE_SANIDADE_CHUTES, nome_v, "finalizacoes_total")
-        fing_m  = _aplicar_teto_piso(fing_m, 0, LIMITE_SANIDADE_CHUTES_GOL, nome_m, "finalizacoes_no_gol")
-        fing_v  = _aplicar_teto_piso(fing_v, 0, LIMITE_SANIDADE_CHUTES_GOL, nome_v, "finalizacoes_no_gol")
-        falta_m = _aplicar_teto_piso(falta_m, MINIMO_SANIDADE_FALTAS, 40, nome_m, "faltas")
-        falta_v = _aplicar_teto_piso(falta_v, MINIMO_SANIDADE_FALTAS, 40, nome_v, "faltas")
-
-        if fin_m   is not None and fin_m   > 0: stats[nome_m]["finalizacoes_casa"].append(fin_m)
-        if fin_v   is not None and fin_v   > 0: stats[nome_v]["finalizacoes_fora"].append(fin_v)
-        if fing_m  is not None and fing_m  > 0: stats[nome_m]["finalizacoes_gol_casa"].append(fing_m)
-        if fing_v  is not None and fing_v  > 0: stats[nome_v]["finalizacoes_gol_fora"].append(fing_v)
-        if esc_m   is not None and esc_m   > 0: stats[nome_m]["escanteios_casa"].append(esc_m)
-        if esc_v   is not None and esc_v   > 0: stats[nome_v]["escanteios_fora"].append(esc_v)
-        if cart_m  is not None and cart_m  > 0: stats[nome_m]["cartoes_casa"].append(cart_m)
-        if cart_v  is not None and cart_v  > 0: stats[nome_v]["cartoes_fora"].append(cart_v)
-        if falta_m is not None and falta_m > 0: stats[nome_m]["faltas_casa"].append(falta_m)
-        if falta_v is not None and falta_v > 0: stats[nome_v]["faltas_fora"].append(falta_v)
+        # Sanidade nos mesmos campos que já tinham histórico de dado ruim
+        fin_m = _aplicar_teto_piso(fin_m, MINIMO_SANIDADE_CHUTES, LIMITE_SANIDADE_CHUTES, casa_nome, "finalizacoes_total", partida_id)
+        fin_v = _aplicar_teto_piso(fin_v, MINIMO_SANIDADE_CHUTES, LIMITE_SANIDADE_CHUTES, fora_nome, "finalizacoes_total", partida_id)
+        fing_m = _aplicar_teto_piso(fing_m, 0, LIMITE_SANIDADE_CHUTES_GOL, casa_nome, "finalizacoes_no_gol", partida_id)
+        fing_v = _aplicar_teto_piso(fing_v, 0, LIMITE_SANIDADE_CHUTES_GOL, fora_nome, "finalizacoes_no_gol", partida_id)
+        falta_m = _aplicar_teto_piso(falta_m, MINIMO_SANIDADE_FALTAS, 40, casa_nome, "faltas", partida_id)
+        falta_v = _aplicar_teto_piso(falta_v, MINIMO_SANIDADE_FALTAS, 40, fora_nome, "faltas", partida_id)
 
         salvar_estatisticas_partida(
-            fixture_id=pid,
-            casa_nome=nome_m, fora_nome=nome_v,
-            data_jogo=_normalizar_data(p.get("data_realizacao", "")),
+            fixture_id=partida_id,
+            casa_nome=casa_nome, fora_nome=fora_nome, data_jogo=data_iso,
             escanteios_casa=esc_m, escanteios_fora=esc_v,
             cartoes_casa=cart_m, cartoes_fora=cart_v,
             chutes_casa=fin_m, chutes_fora=fin_v,
@@ -584,76 +416,62 @@ def buscar_stats_por_time(rodadas: list[int] | None = None) -> dict:
             faltas_casa=falta_m, faltas_fora=falta_v,
         )
 
-    print(f"[STATS] Dados de {len(stats)} times processados")
-    return stats
+        if esc_m is None and esc_v is None and cart_m is None and cart_v is None:
+            sem_dado_esc_cart.append(f"{casa_nome} x {fora_nome}")
+
+        if esc_m is not None: stats_por_time[casa_nome]["escanteios_casa"].append(esc_m)
+        if esc_v is not None: stats_por_time[fora_nome]["escanteios_fora"].append(esc_v)
+        if cart_m is not None: stats_por_time[casa_nome]["cartoes_casa"].append(cart_m)
+        if cart_v is not None: stats_por_time[fora_nome]["cartoes_fora"].append(cart_v)
+        if fin_m is not None: stats_por_time[casa_nome]["chutes_casa"].append(fin_m)
+        if fin_v is not None: stats_por_time[fora_nome]["chutes_fora"].append(fin_v)
+        if fing_m is not None: stats_por_time[casa_nome]["chutes_gol_casa"].append(fing_m)
+        if fing_v is not None: stats_por_time[fora_nome]["chutes_gol_fora"].append(fing_v)
+        if falta_m is not None: stats_por_time[casa_nome]["faltas_casa"].append(falta_m)
+        if falta_v is not None: stats_por_time[fora_nome]["faltas_fora"].append(falta_v)
+
+    print(f"[STATS] {processados_encerrados} jogo(s) encerrado(s) processado(s) na janela "
+          f"({inicio} a {fim})")
+    if sem_dado_esc_cart:
+        print(f"[AVISO] {len(sem_dado_esc_cart)} jogo(s) sem estatística confiável: {', '.join(sem_dado_esc_cart)}")
+
+    salvar_jogos(jogos_pra_salvar)
+    _atualizar_stats_times(stats_por_time)
 
 
-def atualizar_stats_times(rodadas: list[int] | None = None):
-    """
-    Atualiza fin_/fing_/esc_/cart_ por time — MAS só escreve uma coluna se
-    essa execução realmente achou dado real pra ela. Antes, quando a API
-    não devolvia nada (lista vazia), o código escrevia o valor padrão
-    (5.2/4.8/2.2/2.3) mesmo assim — isso apagava qualquer dado bom que já
-    estivesse lá (seja de uma coleta anterior bem-sucedida, seja um valor
-    que você tenha colocado manualmente no Supabase). Agora, sem dado novo,
-    a coluna simplesmente não é tocada — o time mantém o que já tinha.
-
-    Args:
-        rodadas: repassado direto pra buscar_stats_por_time(). None = modo
-            incremental (últimas 4 rodadas). Lista explícita = backfill.
-    """
-    stats = buscar_stats_por_time(rodadas=rodadas)
-    if not stats:
+def _atualizar_stats_times(stats_por_time: dict):
+    """Só escreve uma coluna quando essa execução achou dado real pra ela —
+    sem dado novo, o time mantém o valor que já tinha (não sobrescreve com
+    zero/padrão)."""
+    if not stats_por_time:
         return
-
     atualizados = 0
-    sem_esc_cart = []  # times que ficaram sem dado real de escanteios/cartões nesta execução
-
-    for nome_time, dados in stats.items():
+    for nome_time, dados in stats_por_time.items():
         update = {"data_atualizacao": datetime.now().isoformat()}
+        if dados["chutes_casa"]: update["fin_casa"] = _media(dados["chutes_casa"])
+        if dados["chutes_fora"]: update["fin_fora"] = _media(dados["chutes_fora"])
+        if dados["chutes_gol_casa"]: update["fing_casa"] = _media(dados["chutes_gol_casa"])
+        if dados["chutes_gol_fora"]: update["fing_fora"] = _media(dados["chutes_gol_fora"])
+        if dados["faltas_casa"]: update["falta_casa"] = _media(dados["faltas_casa"])
+        if dados["faltas_fora"]: update["falta_fora"] = _media(dados["faltas_fora"])
+        if dados["escanteios_casa"]: update["esc_casa"] = _media(dados["escanteios_casa"])
+        if dados["escanteios_fora"]: update["esc_fora"] = _media(dados["escanteios_fora"])
+        if dados["cartoes_casa"]: update["cart_casa"] = _media(dados["cartoes_casa"])
+        if dados["cartoes_fora"]: update["cart_fora"] = _media(dados["cartoes_fora"])
 
-        if dados["finalizacoes_casa"]:
-            update["fin_casa"] = _media(dados["finalizacoes_casa"])
-        if dados["finalizacoes_fora"]:
-            update["fin_fora"] = _media(dados["finalizacoes_fora"])
-        if dados["finalizacoes_gol_casa"]:
-            update["fing_casa"] = _media(dados["finalizacoes_gol_casa"])
-        if dados["finalizacoes_gol_fora"]:
-            update["fing_fora"] = _media(dados["finalizacoes_gol_fora"])
-        if dados["faltas_casa"]:
-            update["falta_casa"] = _media(dados["faltas_casa"])
-        if dados["faltas_fora"]:
-            update["falta_fora"] = _media(dados["faltas_fora"])
-
-        tem_esc = bool(dados["escanteios_casa"] or dados["escanteios_fora"])
-        tem_cart = bool(dados["cartoes_casa"] or dados["cartoes_fora"])
-        if dados["escanteios_casa"]:
-            update["esc_casa"] = _media(dados["escanteios_casa"])
-        if dados["escanteios_fora"]:
-            update["esc_fora"] = _media(dados["escanteios_fora"])
-        if dados["cartoes_casa"]:
-            update["cart_casa"] = _media(dados["cartoes_casa"])
-        if dados["cartoes_fora"]:
-            update["cart_fora"] = _media(dados["cartoes_fora"])
-
-        if not (tem_esc and tem_cart):
-            sem_esc_cart.append(nome_time)
-
+        if len(update) <= 1:  # só tinha data_atualizacao, nenhum dado novo
+            continue
         try:
             supabase.table(TABELA_TIMES).update(update).eq("nome", nome_time).execute()
             atualizados += 1
         except Exception as e:
-            print(f"[ERRO] atualizar_stats_times {nome_time}: {e}")
-
-    print(f"[STATS] Finalizações/escanteios/cartões atualizados para {atualizados} times.")
-
-    if sem_esc_cart:
-        print(f"[AVISO] {len(sem_esc_cart)} time(s) SEM dado real de escanteios/cartões "
-              f"(usando o que já existia — padrão ou manual): {', '.join(sem_esc_cart)}")
+            print(f"[ERRO] _atualizar_stats_times {nome_time}: {e}")
+    print(f"[STATS] Estatísticas atualizadas para {atualizados} times.")
 
 
 # ==========================================================
-# NOTÍCIAS -> tabela "noticias"
+# NOTÍCIAS -> tabela "noticias_b" (inalterado — não depende da
+# API de dados esportivos, continua raspando o GE)
 # ==========================================================
 
 def salvar_noticia(texto: str, fonte: str = "sistema"):
@@ -697,23 +515,18 @@ def coletar_noticias() -> dict:
 # ==========================================================
 
 def atualizar_tudo():
-    if not DADOS_FUTEBOL_KEY:
-        print("[API] DADOS_FUTEBOL_KEY não encontrada no .env")
+    if not API_FUTEBOL_KEY:
+        print("[API] API_FUTEBOL_KEY não encontrada (defina o secret no GitHub/'.env' local)")
         return
 
-    print("[COLETOR-B] Iniciando atualização completa (Série B)...")
+    print("[COLETOR-B] Iniciando atualização completa (Série B) — fonte: API Futebol")
 
     times = buscar_tabela()
     if times:
         salvar_times(times)
     time.sleep(1)
 
-    jogos = buscar_partidas()
-    if jogos:
-        salvar_jogos(jogos)
-    time.sleep(1)
-
-    atualizar_stats_times()
+    processar_janela()
     time.sleep(1)
 
     resultado_noticias = coletar_noticias()
