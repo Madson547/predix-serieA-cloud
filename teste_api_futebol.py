@@ -1,9 +1,9 @@
 # ==========================================================
 # TESTE COMPARATIVO — API Futebol (api-futebol.com.br)
 # Script isolado, NÃO faz parte do pipeline principal do Predix.
-# Objetivo único: buscar o mesmo jogo problemático (Criciúma x
-# Goiás, 15/08/2026, Série B) nessa API alternativa e comparar
-# com o que a Dados Futebol devolveu, pra decidir se vale migrar.
+# Objetivo: buscar jogos problemáticos já documentados (Sport x
+# Cuiabá, Série B) nessa API alternativa e comparar com o que a
+# Dados Futebol devolveu, pra decidir se vale migrar.
 # ==========================================================
 
 import os
@@ -80,29 +80,32 @@ def main():
         print(json.dumps(partidas, indent=2, ensure_ascii=False)[:3000])
         return
 
-    alvo = None
+    alvo_lista = []
     for p in lista:
         casa = str(p.get("time_mandante", {}).get("nome_popular", "")).lower()
         fora = str(p.get("time_visitante", {}).get("nome_popular", "")).lower()
-        data = str(p.get("data_realizacao", ""))
-        if "criciúma" in casa or "criciuma" in casa:
-            if "goiás" in fora or "goias" in fora:
-                if "2026-08-15" in data or "15/08/2026" in data:
-                    alvo = p
-                    break
-    if not alvo:
-        print("[AVISO] Não achei o jogo exato por nome+data. Mostrando as primeiras 5 partidas pra conferência manual:")
+        if "sport" in casa and "cuiab" in fora:
+            alvo_lista.append(p)
+        elif "cuiab" in casa and "sport" in fora:
+            alvo_lista.append(p)
+
+    if not alvo_lista:
+        print("[AVISO] Não achei nenhum jogo Sport x Cuiabá. Mostrando as primeiras 5 partidas pra conferência manual:")
         print(json.dumps(lista[:5], indent=2, ensure_ascii=False))
         return
 
-    partida_id = alvo.get("partida_id")
-    print(f"[OK] Partida encontrada: id={partida_id}")
-    print(json.dumps(alvo, indent=2, ensure_ascii=False))
+    print(f"[OK] {len(alvo_lista)} jogo(s) Sport x Cuiabá encontrado(s):")
+    for p in alvo_lista:
+        print(f"  - id={p.get('partida_id')} | {p.get('data_realizacao')} | status={p.get('status')} | "
+              f"{p.get('time_mandante',{}).get('nome_popular')} x {p.get('time_visitante',{}).get('nome_popular')}")
 
-    # 3. Busca o detalhe completo da partida (deve incluir estatísticas)
-    print(f"\n=== 3. Detalhe completo da partida id={partida_id} ===")
-    status, detalhe = _get(f"/partidas/{partida_id}")
-    print(json.dumps(detalhe, indent=2, ensure_ascii=False))
+    # Busca o detalhe completo de CADA jogo encontrado (normalmente 1 ou 2 —
+    # turno e returno)
+    for p in alvo_lista:
+        partida_id = p.get("partida_id")
+        print(f"\n=== 3. Detalhe completo da partida id={partida_id} ({p.get('data_realizacao')}) ===")
+        status, detalhe = _get(f"/partidas/{partida_id}")
+        print(json.dumps(detalhe, indent=2, ensure_ascii=False))
 
 
 if __name__ == "__main__":
