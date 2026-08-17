@@ -34,40 +34,11 @@ def main():
         print("[ERRO] API_FUTEBOL_KEY não encontrada (defina como secret/env).")
         return
 
-    # O plano Free só libera a Série B — precisamos do campeonato_id certo.
-    # Como não conseguimos listar /campeonatos (bloqueado por plano), testamos
-    # por tentativa: só um ID vai responder status 200 de verdade — qualquer
-    # outro (errado, inexistente, ou fora do plano) responde 401 ou 404.
-    print("=== 1. Descobrindo o campeonato_id da Série B por tentativa ===")
-    serie_b_id = None
-    candidatos = list(range(1, 31))
-    for cid in candidatos:
-        status, resp = _get(f"/campeonatos/{cid}/tabela")
-        if status != 200:
-            continue
-        print(f"[CANDIDATO VÁLIDO] campeonato_id={cid} respondeu 200:")
-        print(json.dumps(resp, indent=2, ensure_ascii=False)[:1500])
-        serie_b_id = cid
-        break
-
-    if not serie_b_id:
-        print("[ERRO] Nenhum ID de 1 a 30 respondeu status 200. "
-              "Ampliando a busca pra 31-80...")
-        for cid in range(31, 81):
-            status, resp = _get(f"/campeonatos/{cid}/tabela")
-            if status != 200:
-                continue
-            print(f"[CANDIDATO VÁLIDO] campeonato_id={cid} respondeu 200:")
-            print(json.dumps(resp, indent=2, ensure_ascii=False)[:1500])
-            serie_b_id = cid
-            break
-
-    if not serie_b_id:
-        print("[ERRO] Nenhum ID de 1 a 80 funcionou. Precisa investigar direto "
-              "no painel 'Requisições' ou contatar o suporte.")
-        return
-
-    print(f"\n[OK] campeonato_id da Série B: {serie_b_id}")
+    # campeonato_id da Série B já confirmado numa execução anterior (14 —
+    # tabela retornou Criciúma no topo). Fixando aqui pra não gastar cota
+    # testando de novo 1-30 a cada execução.
+    serie_b_id = 14
+    print(f"=== campeonato_id da Série B: {serie_b_id} (já confirmado) ===")
 
     # 2. Lista partidas do campeonato pra achar Criciúma x Goiás (15/08/2026)
     print("\n=== 2. Buscando partida Criciúma x Goiás ===")
@@ -75,7 +46,40 @@ def main():
     if status != 200:
         print(f"[ERRO] /campeonatos/{serie_b_id}/partidas retornou status {status}")
         return
-    lista = partidas if isinstance(partidas, list) else partidas.get("partidas", partidas.get("data", []))
+
+    # A estrutura de retorno desse endpoint não é garantida (pode vir como
+    # lista simples, dict com 'partidas'/'data', ou agrupado por fase/rodada
+    # como vimos acontecer em outro endpoint da mesma API). Em vez de assumir
+    # um formato e quebrar, inspecionamos primeiro.
+    print(f"[DEBUG] Tipo da resposta: {type(partidas).__name__}")
+    if isinstance(partidas, dict):
+        print(f"[DEBUG] Chaves de primeiro nível: {list(partidas.keys())[:20]}")
+
+    def _extrair_partidas(obj):
+        """Extrai recursivamente todo dict que pareça ser uma partida
+        (tem 'time_mandante' e 'time_visitante'), não importa o nível
+        de aninhamento (fase -> rodada -> partidas, etc.)."""
+        encontradas = []
+        if isinstance(obj, dict):
+            if "time_mandante" in obj and "time_visitante" in obj:
+                encontradas.append(obj)
+            else:
+                for v in obj.values():
+                    encontradas.extend(_extrair_partidas(v))
+        elif isinstance(obj, list):
+            for item in obj:
+                encontradas.extend(_extrair_partidas(item))
+        return encontradas
+
+    lista = _extrair_partidas(partidas)
+    print(f"[DEBUG] Total de partidas extraídas (todos os formatos): {len(lista)}")
+
+    if not lista:
+        print("[AVISO] Não consegui extrair nenhuma partida da estrutura. "
+              "JSON bruto (primeiros 3000 caracteres) pra inspeção manual:")
+        print(json.dumps(partidas, indent=2, ensure_ascii=False)[:3000])
+        return
+
     alvo = None
     for p in lista:
         casa = str(p.get("time_mandante", {}).get("nome_popular", "")).lower()
