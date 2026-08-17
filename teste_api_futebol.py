@@ -22,10 +22,11 @@ def _get(endpoint, params=None):
     resp = requests.get(f"{BASE_URL}{endpoint}", headers=_headers(), params=params, timeout=15)
     print(f"[GET] {endpoint} -> status {resp.status_code}")
     try:
-        return resp.json()
+        corpo = resp.json()
     except Exception:
+        corpo = {}
         print(f"[AVISO] resposta não-JSON: {resp.text[:300]}")
-        return {}
+    return resp.status_code, corpo
 
 
 def main():
@@ -33,38 +34,47 @@ def main():
         print("[ERRO] API_FUTEBOL_KEY não encontrada (defina como secret/env).")
         return
 
-    # O plano Free só libera a Série B — o endpoint /campeonatos (lista geral)
-    # retorna 401 mesmo com chave válida, porque listar TODAS as competições
-    # não está incluso no plano. Por isso descobrimos o campeonato_id certo
-    # por tentativa: cada ID errado também retorna 401 (mesma mensagem
-    # "não faz parte do seu plano"), e o ID certo é o único que responde 200.
-    # Sabemos que Série A = 10 e Copa do Brasil = 2 (documentação oficial),
-    # então testamos uma faixa razoável ao redor desses números.
+    # O plano Free só libera a Série B — precisamos do campeonato_id certo.
+    # Como não conseguimos listar /campeonatos (bloqueado por plano), testamos
+    # por tentativa: só um ID vai responder status 200 de verdade — qualquer
+    # outro (errado, inexistente, ou fora do plano) responde 401 ou 404.
     print("=== 1. Descobrindo o campeonato_id da Série B por tentativa ===")
     serie_b_id = None
     candidatos = list(range(1, 31))
     for cid in candidatos:
-        resp = _get(f"/campeonatos/{cid}/tabela")
-        if isinstance(resp, dict) and resp.get("code") == 401:
+        status, resp = _get(f"/campeonatos/{cid}/tabela")
+        if status != 200:
             continue
-        # Se chegou aqui, essa chamada não caiu no erro de plano — confirma
-        # olhando se tem cara de tabela de classificação (lista com "pontos")
-        print(f"[CANDIDATO] campeonato_id={cid} respondeu algo além do erro 401:")
+        print(f"[CANDIDATO VÁLIDO] campeonato_id={cid} respondeu 200:")
         print(json.dumps(resp, indent=2, ensure_ascii=False)[:1500])
         serie_b_id = cid
         break
 
     if not serie_b_id:
-        print("[ERRO] Nenhum ID na faixa testada (1-30) funcionou. "
-              "Pode ser que o campeonato_id da Série B esteja fora dessa faixa — "
-              "ajuste o range de 'candidatos' e rode de novo.")
+        print("[ERRO] Nenhum ID de 1 a 30 respondeu status 200. "
+              "Ampliando a busca pra 31-80...")
+        for cid in range(31, 81):
+            status, resp = _get(f"/campeonatos/{cid}/tabela")
+            if status != 200:
+                continue
+            print(f"[CANDIDATO VÁLIDO] campeonato_id={cid} respondeu 200:")
+            print(json.dumps(resp, indent=2, ensure_ascii=False)[:1500])
+            serie_b_id = cid
+            break
+
+    if not serie_b_id:
+        print("[ERRO] Nenhum ID de 1 a 80 funcionou. Precisa investigar direto "
+              "no painel 'Requisições' ou contatar o suporte.")
         return
 
-    print(f"\n[OK] campeonato_id da Série B parece ser: {serie_b_id}")
+    print(f"\n[OK] campeonato_id da Série B: {serie_b_id}")
 
     # 2. Lista partidas do campeonato pra achar Criciúma x Goiás (15/08/2026)
     print("\n=== 2. Buscando partida Criciúma x Goiás ===")
-    partidas = _get(f"/campeonatos/{serie_b_id}/partidas")
+    status, partidas = _get(f"/campeonatos/{serie_b_id}/partidas")
+    if status != 200:
+        print(f"[ERRO] /campeonatos/{serie_b_id}/partidas retornou status {status}")
+        return
     lista = partidas if isinstance(partidas, list) else partidas.get("partidas", partidas.get("data", []))
     alvo = None
     for p in lista:
@@ -87,7 +97,7 @@ def main():
 
     # 3. Busca o detalhe completo da partida (deve incluir estatísticas)
     print(f"\n=== 3. Detalhe completo da partida id={partida_id} ===")
-    detalhe = _get(f"/partidas/{partida_id}")
+    status, detalhe = _get(f"/partidas/{partida_id}")
     print(json.dumps(detalhe, indent=2, ensure_ascii=False))
 
 
