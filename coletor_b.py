@@ -264,35 +264,54 @@ def salvar_estatisticas_partida(
     """
     if not casa_nome or not fora_nome or not data_jogo:
         return
+
+    payload = {
+        "fixture_id": fixture_id,
+        "casa_nome": casa_nome,
+        "fora_nome": fora_nome,
+        "data": data_jogo,
+        "escanteios_casa": escanteios_casa,
+        "escanteios_fora": escanteios_fora,
+        "cartoes_casa": cartoes_casa,
+        "cartoes_fora": cartoes_fora,
+        "chutes_casa": chutes_casa,
+        "chutes_fora": chutes_fora,
+        "chutes_gol_casa": chutes_gol_casa,
+        "chutes_gol_fora": chutes_gol_fora,
+        "faltas_casa": faltas_casa,
+        "faltas_fora": faltas_fora,
+        "data_atualizacao": datetime.now().isoformat(),
+    }
+
     try:
         existe = supabase.table(TABELA_ESTATISTICAS_PARTIDAS).select("fixture_id") \
             .eq("casa_nome", casa_nome).eq("fora_nome", fora_nome).eq("data", data_jogo).execute()
 
-        payload = {
-            "fixture_id": fixture_id,
-            "casa_nome": casa_nome,
-            "fora_nome": fora_nome,
-            "data": data_jogo,
-            "escanteios_casa": escanteios_casa,
-            "escanteios_fora": escanteios_fora,
-            "cartoes_casa": cartoes_casa,
-            "cartoes_fora": cartoes_fora,
-            "chutes_casa": chutes_casa,
-            "chutes_fora": chutes_fora,
-            "chutes_gol_casa": chutes_gol_casa,
-            "chutes_gol_fora": chutes_gol_fora,
-            "faltas_casa": faltas_casa,
-            "faltas_fora": faltas_fora,
-            "data_atualizacao": datetime.now().isoformat(),
-        }
-
         if existe.data:
             supabase.table(TABELA_ESTATISTICAS_PARTIDAS).update(payload) \
                 .eq("casa_nome", casa_nome).eq("fora_nome", fora_nome).eq("data", data_jogo).execute()
-        else:
-            supabase.table(TABELA_ESTATISTICAS_PARTIDAS).insert(payload).execute()
+            return
+
+        supabase.table(TABELA_ESTATISTICAS_PARTIDAS).insert(payload).execute()
     except Exception as e:
-        print(f"[ERRO] salvar_estatisticas_partida ({casa_nome} x {fora_nome}, {data_jogo}): {e}")
+        # FALLBACK 17/08/2026: em alguns casos o select por nome+data não
+        # encontra uma linha que na verdade já existe (suspeita: diferença
+        # de normalização Unicode em acentos entre o texto vindo da API e
+        # o que está salvo — visualmente idêntico, mas não bate na
+        # comparação exata do banco). Se o insert falhar por fixture_id
+        # já existir, cai pra update por fixture_id (numérico, imune a
+        # esse problema) — e de quebra já corrige o nome armazenado.
+        msg = str(e)
+        if "duplicate key" in msg or "23505" in msg:
+            try:
+                supabase.table(TABELA_ESTATISTICAS_PARTIDAS).update(payload) \
+                    .eq("fixture_id", fixture_id).execute()
+                print(f"[INFO] {casa_nome} x {fora_nome} ({data_jogo}): já existia sob "
+                      f"fixture_id={fixture_id}, atualizado por esse campo (nome não bateu por acentuação).")
+            except Exception as e2:
+                print(f"[ERRO] fallback por fixture_id falhou ({casa_nome} x {fora_nome}, {data_jogo}): {e2}")
+        else:
+            print(f"[ERRO] salvar_estatisticas_partida ({casa_nome} x {fora_nome}, {data_jogo}): {e}")
 
 
 def salvar_jogos(jogos: list):
@@ -321,7 +340,18 @@ def salvar_jogos(jogos: list):
                 supabase.table(TABELA_JOGOS).insert(row).execute()
             salvos += 1
         except Exception as e:
-            print(f"[ERRO] salvar_jogos {row.get('casa_nome')} x {row.get('fora_nome')}: {e}")
+            # Mesmo fallback do salvar_estatisticas_partida — ver comentário lá.
+            msg = str(e)
+            if ("duplicate key" in msg or "23505" in msg) and row.get("fixture_id"):
+                try:
+                    supabase.table(TABELA_JOGOS).update(row).eq("fixture_id", row["fixture_id"]).execute()
+                    salvos += 1
+                    print(f"[INFO] {row['casa_nome']} x {row['fora_nome']}: já existia sob "
+                          f"fixture_id={row['fixture_id']}, atualizado por esse campo.")
+                except Exception as e2:
+                    print(f"[ERRO] fallback por fixture_id falhou ({row['casa_nome']} x {row['fora_nome']}): {e2}")
+            else:
+                print(f"[ERRO] salvar_jogos {row.get('casa_nome')} x {row.get('fora_nome')}: {e}")
     print(f"[JOGOS] {salvos} partidas salvas/atualizadas.")
 
 
