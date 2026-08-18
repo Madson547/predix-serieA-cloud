@@ -6,20 +6,23 @@
 #
 # Duas fontes de "resultado real", combinadas num só dict por jogo:
 #   1. jogos/jogos_b            -> gols_casa, gols_fora, status
-#   2. estatisticas_partidas(_b) -> escanteios/cartões/chutes/faltas
-#      REAIS daquela partida específica (07/08/2026 — antes o coletor
-#      calculava esses valores só pra alimentar a média móvel do time
-#      e descartava; agora fica salvo por partida, o que finalmente
-#      permite diagnosticar esses mercados também, não só resultado/
-#      gols/btts/casa_marca/fora_marca).
+#   2. estatisticas_partidas(_b) -> escanteios/cartões/chutes/faltas/
+#      impedimentos REAIS daquela partida específica (07/08/2026 —
+#      antes o coletor calculava esses valores só pra alimentar a
+#      média móvel do time e descartava; agora fica salvo por
+#      partida, o que permite diagnosticar esses mercados também).
 #
 # PARAMETRIZADO POR LIGA (sufixo_liga="" Série A, "_b" Série B).
 #
+# IMPEDIMENTOS adicionado em 17/08/2026 — substitui Faltas como
+# mercado sugerido na Série B (Betano não oferece Faltas pra essa
+# liga), e é oferecido como mercado extra na Série A.
+#
 # LIMITAÇÃO REMANESCENTE: jogos analisados/salvos ANTES de 07/08/2026
 # não têm linha correspondente em estatisticas_partidas (a tabela é
-# nova) — pra esses, escanteios/cartões/chutes/faltas continuam sem
-# poder ser avaliados, mas resultado/gols/btts/casa_marca/fora_marca
-# funcionam normalmente desde sempre.
+# nova) — pra esses, escanteios/cartões/chutes/faltas/impedimentos
+# continuam sem poder ser avaliados, mas resultado/gols/btts/
+# casa_marca/fora_marca funcionam normalmente desde sempre.
 # ==========================================================
 
 import json
@@ -29,6 +32,7 @@ CATEGORIAS_DIAGNOSTICAVEIS = [
     "resultado", "gols", "btts", "casa_marca", "fora_marca",
     "escanteios", "cartoes", "chutes_casa", "chutes_fora",
     "chutes_gol_casa", "chutes_gol_fora", "faltas_casa", "faltas_fora",
+    "impedimentos_casa", "impedimentos_fora", "impedimentos_total",
 ]
 
 NOMES_CATEGORIAS = {
@@ -45,6 +49,9 @@ NOMES_CATEGORIAS = {
     "chutes_gol_fora": "Chutes no Gol — Visitante",
     "faltas_casa": "Faltas — Mandante",
     "faltas_fora": "Faltas — Visitante",
+    "impedimentos_casa": "Impedimentos — Mandante",
+    "impedimentos_fora": "Impedimentos — Visitante",
+    "impedimentos_total": "Impedimentos (Over/Under)",
 }
 
 
@@ -55,7 +62,8 @@ def _acertou(categoria, mercado, real):
     estatisticas_partidas: gols_casa, gols_fora, escanteios_casa,
     escanteios_fora, cartoes_casa, cartoes_fora, chutes_casa,
     chutes_fora, chutes_gol_casa, chutes_gol_fora, faltas_casa,
-    faltas_fora — qualquer campo pode vir None se ainda não coletado.
+    faltas_fora, impedimentos_casa, impedimentos_fora — qualquer campo
+    pode vir None se ainda não coletado.
     Retorna True/False, ou None se não dá pra avaliar.
     """
     direcao = mercado.get("direcao")
@@ -121,8 +129,15 @@ def _acertou(categoria, mercado, real):
         total = cc + cf
         return total > linha if direcao == "mais" else total < linha
 
+    if categoria == "impedimentos_total":
+        ic, iff = real.get("impedimentos_casa"), real.get("impedimentos_fora")
+        if ic is None or iff is None or linha is None:
+            return None
+        total = ic + iff
+        return total > linha if direcao == "mais" else total < linha
+
     if categoria in ("chutes_casa", "chutes_fora", "chutes_gol_casa", "chutes_gol_fora",
-                     "faltas_casa", "faltas_fora"):
+                     "faltas_casa", "faltas_fora", "impedimentos_casa", "impedimentos_fora"):
         valor = real.get(categoria)
         if valor is None or linha is None:
             return None
@@ -133,7 +148,7 @@ def _acertou(categoria, mercado, real):
 
 def _montar_real(jogo_row, estat_row):
     """Combina a linha de jogos (placar) com a linha de estatisticas_partidas
-    (escanteios/cartões/chutes/faltas) num único dict pra _acertou()."""
+    (escanteios/cartões/chutes/faltas/impedimentos) num único dict pra _acertou()."""
     real = {
         "gols_casa": jogo_row.get("gols_casa") if jogo_row else None,
         "gols_fora": jogo_row.get("gols_fora") if jogo_row else None,
@@ -141,7 +156,7 @@ def _montar_real(jogo_row, estat_row):
     if estat_row:
         for campo in ("escanteios_casa", "escanteios_fora", "cartoes_casa", "cartoes_fora",
                       "chutes_casa", "chutes_fora", "chutes_gol_casa", "chutes_gol_fora",
-                      "faltas_casa", "faltas_fora"):
+                      "faltas_casa", "faltas_fora", "impedimentos_casa", "impedimentos_fora"):
             real[campo] = estat_row.get(campo)
     return real
 
