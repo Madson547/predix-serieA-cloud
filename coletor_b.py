@@ -46,6 +46,24 @@ BASE_URL = "https://api.api-futebol.com.br/v1"
 # temporada fica dentro de "edicao", aninhada no mesmo campeonato_id).
 CAMPEONATO_ID_SERIE_B = 14
 
+# Os dois provedores grafam alguns times de forma diferente. Sem isso, o
+# mesmo time vira "dois times" em times_b, e o mesmo jogo vira "dois jogos"
+# em jogos_b/estatisticas_partidas_b (confirmado em 17/08/2026 — 12 jogos
+# duplicados + 4 times duplicados na primeira execução real). Padronizamos
+# pro nome que já estava em uso nas previsões/apostas salvas antes da
+# migração (nome antigo, da Dados Futebol), pra não quebrar o histórico.
+NORMALIZACAO_NOMES_TIMES = {
+    "América-MG": "América Mineiro",
+    "Athletic Club": "Athletic-MG",
+    "Atlético-GO": "Atlético Goianiense",
+    "Operário-PR": "Operário Ferroviário",
+}
+
+
+def _normalizar_nome_time(nome: str) -> str:
+    return NORMALIZACAO_NOMES_TIMES.get(nome, nome)
+
+
 TABELA_JOGOS = "jogos_b"
 TABELA_TIMES = "times_b"
 TABELA_ESTATISTICAS_PARTIDAS = "estatisticas_partidas_b"
@@ -112,7 +130,7 @@ def buscar_tabela() -> list:
     for entry in linhas:
         time_info = entry.get("time", {})
         times.append({
-            "nome":    time_info.get("nome_popular", ""),
+            "nome":    _normalizar_nome_time(time_info.get("nome_popular", "")),
             "posicao": entry.get("posicao"),
             "pts":     entry.get("pontos", 0),
             "j":       entry.get("jogos", 0),
@@ -233,10 +251,24 @@ def salvar_estatisticas_partida(
     chutes_casa, chutes_fora, chutes_gol_casa, chutes_gol_fora,
     faltas_casa, faltas_fora,
 ):
-    if not fixture_id:
+    """
+    CORREÇÃO 17/08/2026: o upsert usava on_conflict='fixture_id', mas o
+    fixture_id NUNCA bate entre provedores diferentes (Dados Futebol usava
+    uma numeração, API Futebol usa outra) — isso duplicava toda partida já
+    coletada antes da migração, em vez de atualizar. A identidade real e
+    estável de uma partida é casa_nome+fora_nome+data, que é justamente
+    como diagnostico.py já busca o jogo — então usamos os mesmos três
+    campos aqui, fazendo select+update/insert manual (o Supabase não tem
+    uma constraint de unicidade composta configurada nessas colunas, então
+    não dá pra usar on_conflict direto nelas).
+    """
+    if not casa_nome or not fora_nome or not data_jogo:
         return
     try:
-        supabase.table(TABELA_ESTATISTICAS_PARTIDAS).upsert({
+        existe = supabase.table(TABELA_ESTATISTICAS_PARTIDAS).select("id") \
+            .eq("casa_nome", casa_nome).eq("fora_nome", fora_nome).eq("data", data_jogo).execute()
+
+        payload = {
             "fixture_id": fixture_id,
             "casa_nome": casa_nome,
             "fora_nome": fora_nome,
@@ -252,28 +284,41 @@ def salvar_estatisticas_partida(
             "faltas_casa": faltas_casa,
             "faltas_fora": faltas_fora,
             "data_atualizacao": datetime.now().isoformat(),
-        }, on_conflict="fixture_id").execute()
+        }
+
+        if existe.data:
+            supabase.table(TABELA_ESTATISTICAS_PARTIDAS).update(payload) \
+                .eq("casa_nome", casa_nome).eq("fora_nome", fora_nome).eq("data", data_jogo).execute()
+        else:
+            supabase.table(TABELA_ESTATISTICAS_PARTIDAS).insert(payload).execute()
     except Exception as e:
-        print(f"[ERRO] salvar_estatisticas_partida (fixture_id={fixture_id}): {e}")
+        print(f"[ERRO] salvar_estatisticas_partida ({casa_nome} x {fora_nome}, {data_jogo}): {e}")
 
 
 def salvar_jogos(jogos: list):
+    """
+    CORREÇÃO 17/08/2026: mesmo problema do salvar_estatisticas_partida —
+    procurar por fixture_id não reconhece jogos já salvos pelo provedor
+    antigo (numeração diferente). Passa a identificar o jogo por
+    casa_nome+fora_nome+data, que é estável entre provedores.
+    """
     if not jogos:
         return
     salvos = 0
     for row in jogos:
-        if not row.get("casa_nome") or not row.get("fora_nome"):
+        if not row.get("casa_nome") or not row.get("fora_nome") or not row.get("data"):
             continue
         row["data_atualizacao"] = datetime.now().isoformat()
         try:
-            if row.get("fixture_id"):
-                existe = supabase.table(TABELA_JOGOS).select("id") \
-                    .eq("fixture_id", row["fixture_id"]).execute()
-                if existe.data:
-                    supabase.table(TABELA_JOGOS).update(row).eq("fixture_id", row["fixture_id"]).execute()
-                    salvos += 1
-                    continue
-            supabase.table(TABELA_JOGOS).insert(row).execute()
+            existe = supabase.table(TABELA_JOGOS).select("id") \
+                .eq("casa_nome", row["casa_nome"]).eq("fora_nome", row["fora_nome"]) \
+                .eq("data", row["data"]).execute()
+            if existe.data:
+                supabase.table(TABELA_JOGOS).update(row) \
+                    .eq("casa_nome", row["casa_nome"]).eq("fora_nome", row["fora_nome"]) \
+                    .eq("data", row["data"]).execute()
+            else:
+                supabase.table(TABELA_JOGOS).insert(row).execute()
             salvos += 1
         except Exception as e:
             print(f"[ERRO] salvar_jogos {row.get('casa_nome')} x {row.get('fora_nome')}: {e}")
@@ -324,8 +369,8 @@ def processar_janela():
             continue
 
         partida_id = p.get("partida_id")
-        casa_nome = p.get("time_mandante", {}).get("nome_popular", "")
-        fora_nome = p.get("time_visitante", {}).get("nome_popular", "")
+        casa_nome = _normalizar_nome_time(p.get("time_mandante", {}).get("nome_popular", ""))
+        fora_nome = _normalizar_nome_time(p.get("time_visitante", {}).get("nome_popular", ""))
         status_raw = p.get("status")
         finalizado = status_raw == "finalizado"
 
