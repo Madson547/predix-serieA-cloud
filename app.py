@@ -138,6 +138,11 @@ def analisar_confronto(casa, fora, data_jogo=None, sufixo_liga=""):
         # MotorPoisson se o time ainda não tiver dado coletado.
         faltas_casa=_valor_ou_padrao(tc, "falta_casa", 10.0),
         faltas_fora=_valor_ou_padrao(tf, "falta_fora", 11.0),
+        # Impedimentos reais por time — NOVO (17/08/2026). Coletado pelo
+        # coletor_b.py (Série B, via API Futebol) no lugar de Faltas. Ainda
+        # não coletado pelo coletor.py (Série A) — cai no fallback até lá.
+        impedimentos_casa=_valor_ou_padrao(tc, "imped_casa", 1.5),
+        impedimentos_fora=_valor_ou_padrao(tf, "imped_fora", 1.3),
     )
     # Anexado à resposta só pra UI conseguir avisar quando um ajuste manual
     # (planilha) entrou no cálculo, sem precisar buscar de novo.
@@ -257,6 +262,25 @@ def montar_mercados(resultado, casa, fora, sufixo_liga=""):
         else:
             mercados["faltas_fora"] = {"tipo": "faltas_fora", "nome": f"Menos de {resultado.linha_faltas_fora} Faltas ({fora})", "prob": 100 - resultado.prob_over_faltas_fora, "linha": resultado.linha_faltas_fora, "direcao": "menos"}
 
+    # Impedimentos — por time E total. NOVO (17/08/2026). Oferecido nas
+    # DUAS ligas: na Série B substitui Faltas (mercado que a Betano não
+    # tem pra essa liga); na Série A entra como mercado extra, além de
+    # Faltas (que a Betano já oferece lá normalmente).
+    if resultado.prob_over_impedimentos_casa >= 50:
+        mercados["impedimentos_casa"] = {"tipo": "impedimentos_casa", "nome": f"Mais de {resultado.linha_impedimentos_casa} Impedimentos ({casa})", "prob": resultado.prob_over_impedimentos_casa, "linha": resultado.linha_impedimentos_casa, "direcao": "mais"}
+    else:
+        mercados["impedimentos_casa"] = {"tipo": "impedimentos_casa", "nome": f"Menos de {resultado.linha_impedimentos_casa} Impedimentos ({casa})", "prob": 100 - resultado.prob_over_impedimentos_casa, "linha": resultado.linha_impedimentos_casa, "direcao": "menos"}
+
+    if resultado.prob_over_impedimentos_fora >= 50:
+        mercados["impedimentos_fora"] = {"tipo": "impedimentos_fora", "nome": f"Mais de {resultado.linha_impedimentos_fora} Impedimentos ({fora})", "prob": resultado.prob_over_impedimentos_fora, "linha": resultado.linha_impedimentos_fora, "direcao": "mais"}
+    else:
+        mercados["impedimentos_fora"] = {"tipo": "impedimentos_fora", "nome": f"Menos de {resultado.linha_impedimentos_fora} Impedimentos ({fora})", "prob": 100 - resultado.prob_over_impedimentos_fora, "linha": resultado.linha_impedimentos_fora, "direcao": "menos"}
+
+    if resultado.prob_over_impedimentos_total >= 50:
+        mercados["impedimentos_total"] = {"tipo": "impedimentos_total", "nome": f"Mais de {resultado.linha_impedimentos_total} Impedimentos (Total)", "prob": resultado.prob_over_impedimentos_total, "linha": resultado.linha_impedimentos_total, "direcao": "mais"}
+    else:
+        mercados["impedimentos_total"] = {"tipo": "impedimentos_total", "nome": f"Menos de {resultado.linha_impedimentos_total} Impedimentos (Total)", "prob": 100 - resultado.prob_over_impedimentos_total, "linha": resultado.linha_impedimentos_total, "direcao": "menos"}
+
     return mercados
 
 
@@ -335,12 +359,19 @@ def gerar_multiplas(resultado, casa, fora, sufixo_liga=""):
     mercados = montar_mercados(resultado, casa, fora, sufixo_liga=sufixo_liga)
     classificacao, taxas = classificar_categorias_dinamico(sufixo_liga)
 
+    # Na Série B, Faltas não é sugerido (Betano não oferece esse mercado
+    # pra essa liga — ver montar_mercados). As múltiplas usam Impedimentos
+    # no lugar, que agora ocupa o papel que Faltas tinha nos combos. Na
+    # Série A nada muda aqui — Faltas continua normalmente.
+    chave_extra_casa = "impedimentos_casa" if sufixo_liga == "_b" else "faltas_casa"
+    chave_extra_fora = "impedimentos_fora" if sufixo_liga == "_b" else "faltas_fora"
+
     combos = [
         ("Múltipla 1 — Mais Segura", ["resultado", "gols", "escanteios"]),
-        ("Múltipla 2 — Foco no Mandante", ["casa_marca", "chutes_casa", "faltas_fora"]),
-        ("Múltipla 3 — Foco no Visitante", ["fora_marca", "chutes_fora", "faltas_casa"]),
-        ("Múltipla 4 — Ambas Marcam + Cartões", ["btts", "cartoes", "faltas_casa"]),
-        ("Múltipla 5 — Mais Arriscada (Mix)", ["casa_marca", "fora_marca", "faltas_fora"]),
+        ("Múltipla 2 — Foco no Mandante", ["casa_marca", "chutes_casa", chave_extra_fora]),
+        ("Múltipla 3 — Foco no Visitante", ["fora_marca", "chutes_fora", chave_extra_casa]),
+        ("Múltipla 4 — Ambas Marcam + Cartões", ["btts", "cartoes", chave_extra_casa]),
+        ("Múltipla 5 — Mais Arriscada (Mix)", ["casa_marca", "fora_marca", chave_extra_fora]),
     ]
 
     multiplas = []
@@ -524,6 +555,10 @@ with aba_painel:
                 if SUFIXO != "_b":
                     st.warning(f"🟨 Faltas {jogo['casa_nome']}: média {resultado.faltas_casa} | Mais de {resultado.linha_faltas_casa}: {resultado.prob_over_faltas_casa}%")
                     st.warning(f"🟨 Faltas {jogo['fora_nome']}: média {resultado.faltas_fora} | Mais de {resultado.linha_faltas_fora}: {resultado.prob_over_faltas_fora}%")
+                # Impedimentos — NOVO (17/08/2026), exibido nas duas ligas.
+                st.warning(f"🚩 Impedimentos {jogo['casa_nome']}: média {resultado.impedimentos_casa} | Mais de {resultado.linha_impedimentos_casa}: {resultado.prob_over_impedimentos_casa}%")
+                st.warning(f"🚩 Impedimentos {jogo['fora_nome']}: média {resultado.impedimentos_fora} | Mais de {resultado.linha_impedimentos_fora}: {resultado.prob_over_impedimentos_fora}%")
+                st.warning(f"🚩 Impedimentos (Total): média {resultado.impedimentos_total} | Mais de {resultado.linha_impedimentos_total}: {resultado.prob_over_impedimentos_total}%")
                 st.info(f"🏆 Placar mais provável: **{resultado.placar_mais_provavel}**")
             else:
                 st.warning("Análise não disponível — time não encontrado no banco.")
