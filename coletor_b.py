@@ -82,7 +82,9 @@ JANELA_DIAS_FUTUROS = 15
 LIMITE_SANIDADE_CHUTES = 35
 LIMITE_SANIDADE_CHUTES_GOL = 20
 MINIMO_SANIDADE_CHUTES = 5
-MINIMO_SANIDADE_FALTAS = 3
+# MINIMO_SANIDADE_FALTAS removida em 17/08/2026 — Faltas não é mais
+# coletado pra Série B (Betano não oferece esse mercado pra essa liga;
+# substituído por Impedimentos).
 
 
 def _headers():
@@ -249,7 +251,7 @@ def salvar_estatisticas_partida(
     fixture_id, casa_nome, fora_nome, data_jogo,
     escanteios_casa, escanteios_fora, cartoes_casa, cartoes_fora,
     chutes_casa, chutes_fora, chutes_gol_casa, chutes_gol_fora,
-    faltas_casa, faltas_fora,
+    faltas_casa, faltas_fora, impedimentos_casa=None, impedimentos_fora=None,
 ):
     """
     CORREÇÃO 17/08/2026: o upsert usava on_conflict='fixture_id', mas o
@@ -261,6 +263,14 @@ def salvar_estatisticas_partida(
     campos aqui, fazendo select+update/insert manual (o Supabase não tem
     uma constraint de unicidade composta configurada nessas colunas, então
     não dá pra usar on_conflict direto nelas).
+
+    faltas_casa/faltas_fora: SEMPRE None a partir de 17/08/2026 (Série B
+    parou de coletar Faltas — Betano não oferece esse mercado pra essa
+    liga). Os parâmetros continuam existindo só pra não quebrar a coluna
+    da tabela; quem chama passa None explicitamente.
+    impedimentos_casa/impedimentos_fora: NOVO 17/08/2026, no lugar de
+    Faltas. Requer as colunas impedimentos_casa/impedimentos_fora em
+    estatisticas_partidas_b (ver ALTER TABLE fornecido).
     """
     if not casa_nome or not fora_nome or not data_jogo:
         return
@@ -280,6 +290,8 @@ def salvar_estatisticas_partida(
         "chutes_gol_fora": chutes_gol_fora,
         "faltas_casa": faltas_casa,
         "faltas_fora": faltas_fora,
+        "impedimentos_casa": impedimentos_casa,
+        "impedimentos_fora": impedimentos_fora,
         "data_atualizacao": datetime.now().isoformat(),
     }
 
@@ -410,7 +422,7 @@ def processar_janela():
                 "cartoes_casa": [], "cartoes_fora": [],
                 "chutes_casa": [], "chutes_fora": [],
                 "chutes_gol_casa": [], "chutes_gol_fora": [],
-                "faltas_casa": [], "faltas_fora": [],
+                "impedimentos_casa": [], "impedimentos_fora": [],
             })
 
         if not finalizado:
@@ -462,8 +474,10 @@ def processar_janela():
 
         esc_m = est_m.get("escanteios") if m_confiavel else None
         esc_v = est_v.get("escanteios") if v_confiavel else None
-        falta_m = est_m.get("faltas") if m_confiavel else None
-        falta_v = est_v.get("faltas") if v_confiavel else None
+        # Faltas — REMOVIDO DA COLETA em 17/08/2026 (Betano não oferece
+        # esse mercado pra Série B; substituído por Impedimentos).
+        imped_m = est_m.get("impedimentos") if m_confiavel else None
+        imped_v = est_v.get("impedimentos") if v_confiavel else None
         fin_m = est_m.get("finalizacao", {}).get("total") if m_confiavel else None
         fin_v = est_v.get("finalizacao", {}).get("total") if v_confiavel else None
         fing_m = est_m.get("finalizacao", {}).get("no_gol") if m_confiavel else None
@@ -478,8 +492,11 @@ def processar_janela():
         fin_v = _aplicar_teto_piso(fin_v, MINIMO_SANIDADE_CHUTES, LIMITE_SANIDADE_CHUTES, fora_nome, "finalizacoes_total", partida_id)
         fing_m = _aplicar_teto_piso(fing_m, 0, LIMITE_SANIDADE_CHUTES_GOL, casa_nome, "finalizacoes_no_gol", partida_id)
         fing_v = _aplicar_teto_piso(fing_v, 0, LIMITE_SANIDADE_CHUTES_GOL, fora_nome, "finalizacoes_no_gol", partida_id)
-        falta_m = _aplicar_teto_piso(falta_m, MINIMO_SANIDADE_FALTAS, 40, casa_nome, "faltas", partida_id)
-        falta_v = _aplicar_teto_piso(falta_v, MINIMO_SANIDADE_FALTAS, 40, fora_nome, "faltas", partida_id)
+        # Impedimentos raramente passa de ~8 num jogo — teto largo só pra
+        # pegar valor claramente absurdo (dado quebrado), sem piso mínimo
+        # (zero impedimentos no jogo inteiro é perfeitamente normal).
+        imped_m = _aplicar_teto_piso(imped_m, 0, 15, casa_nome, "impedimentos", partida_id)
+        imped_v = _aplicar_teto_piso(imped_v, 0, 15, fora_nome, "impedimentos", partida_id)
 
         salvar_estatisticas_partida(
             fixture_id=partida_id,
@@ -488,7 +505,8 @@ def processar_janela():
             cartoes_casa=cart_m, cartoes_fora=cart_v,
             chutes_casa=fin_m, chutes_fora=fin_v,
             chutes_gol_casa=fing_m, chutes_gol_fora=fing_v,
-            faltas_casa=falta_m, faltas_fora=falta_v,
+            faltas_casa=None, faltas_fora=None,
+            impedimentos_casa=imped_m, impedimentos_fora=imped_v,
         )
 
         if esc_m is None and esc_v is None and cart_m is None and cart_v is None:
@@ -502,8 +520,8 @@ def processar_janela():
         if fin_v is not None: stats_por_time[fora_nome]["chutes_fora"].append(fin_v)
         if fing_m is not None: stats_por_time[casa_nome]["chutes_gol_casa"].append(fing_m)
         if fing_v is not None: stats_por_time[fora_nome]["chutes_gol_fora"].append(fing_v)
-        if falta_m is not None: stats_por_time[casa_nome]["faltas_casa"].append(falta_m)
-        if falta_v is not None: stats_por_time[fora_nome]["faltas_fora"].append(falta_v)
+        if imped_m is not None: stats_por_time[casa_nome]["impedimentos_casa"].append(imped_m)
+        if imped_v is not None: stats_por_time[fora_nome]["impedimentos_fora"].append(imped_v)
 
     print(f"[STATS] {processados_encerrados} jogo(s) encerrado(s) processado(s) na janela "
           f"({inicio} a {fim})")
@@ -527,8 +545,8 @@ def _atualizar_stats_times(stats_por_time: dict):
         if dados["chutes_fora"]: update["fin_fora"] = _media(dados["chutes_fora"])
         if dados["chutes_gol_casa"]: update["fing_casa"] = _media(dados["chutes_gol_casa"])
         if dados["chutes_gol_fora"]: update["fing_fora"] = _media(dados["chutes_gol_fora"])
-        if dados["faltas_casa"]: update["falta_casa"] = _media(dados["faltas_casa"])
-        if dados["faltas_fora"]: update["falta_fora"] = _media(dados["faltas_fora"])
+        if dados["impedimentos_casa"]: update["imped_casa"] = _media(dados["impedimentos_casa"])
+        if dados["impedimentos_fora"]: update["imped_fora"] = _media(dados["impedimentos_fora"])
         if dados["escanteios_casa"]: update["esc_casa"] = _media(dados["escanteios_casa"])
         if dados["escanteios_fora"]: update["esc_fora"] = _media(dados["escanteios_fora"])
         if dados["cartoes_casa"]: update["cart_casa"] = _media(dados["cartoes_casa"])
