@@ -64,13 +64,30 @@ class ResultadoPoisson:
     linha_chutes_gol_fora: float
     prob_over_chutes_gol_fora: float
 
-    # Faltas — POR TIME (não combinado), mesmo padrão de chutes/escanteios
+    # Faltas — POR TIME (não combinado), mesmo padrão de chutes/escanteios.
+    # Mercado excluído da Série B no app.py (Betano não oferece), mas o
+    # cálculo continua existindo aqui — é reaproveitável se algum dia
+    # a Série B voltar a ter esse mercado disponível na casa.
     faltas_casa: float
     faltas_fora: float
     linha_faltas_casa: float
     prob_over_faltas_casa: float
     linha_faltas_fora: float
     prob_over_faltas_fora: float
+
+    # Impedimentos — NOVO (17/08/2026). Por time E total combinado, mesmo
+    # padrão de chutes (por time) + escanteios (total). Adicionado como
+    # substituto de Faltas na Série B (mercado que a Betano não oferece
+    # pra essa liga) e como mercado extra na Série A.
+    impedimentos_casa: float
+    impedimentos_fora: float
+    linha_impedimentos_casa: float
+    prob_over_impedimentos_casa: float
+    linha_impedimentos_fora: float
+    prob_over_impedimentos_fora: float
+    impedimentos_total: float
+    linha_impedimentos_total: float
+    prob_over_impedimentos_total: float
 
     # Placar mais provável
     placar_mais_provavel: str
@@ -145,6 +162,8 @@ class MotorPoisson:
         chutes_gol_fora: float = 3.3,
         faltas_casa: float = 10.0,
         faltas_fora: float = 11.0,
+        impedimentos_casa: float = 1.5,
+        impedimentos_fora: float = 1.3,
     ) -> ResultadoPoisson:
         """
         Calcula probabilidades completas para um confronto.
@@ -156,9 +175,10 @@ class MotorPoisson:
             media_gols_liga: Média real de gols/jogo da liga (calculada
                 a partir dos 20 times coletados em 2026-07)
             fator_qualitativo_*: Multiplicador por desfalques/notícias (0.80–1.20)
-            cantos_*, cartoes_*, chutes_*, chutes_gol_*, faltas_*: Médias
-                reais por time (coletor.py), com defaults de fallback caso
-                o time ainda não tenha dado real coletado.
+            cantos_*, cartoes_*, chutes_*, chutes_gol_*, faltas_*,
+                impedimentos_*: Médias reais por time (coletor.py/coletor_b.py),
+                com defaults de fallback caso o time ainda não tenha dado
+                real coletado.
         """
         media_casa = media_gols_liga * self.FATOR_CASA
         media_fora = media_gols_liga * self.FATOR_FORA
@@ -252,11 +272,23 @@ class MotorPoisson:
         linha_chutes_gol_fora = self._linha_media(chutes_gol_fora)
         prob_over_chutes_gol_fora = self._prob_over_poisson(chutes_gol_fora, linha_chutes_gol_fora) * 100
 
-        # Faltas — por time, mesmo padrão de chutes/escanteios.
+        # Faltas — por time, mesmo padrão de chutes/escanteios. (Mercado
+        # excluído da sugestão na Série B pelo app.py — Betano não oferece
+        # — mas o cálculo continua existindo aqui sem problema.)
         linha_faltas_casa = self._linha_media(faltas_casa)
         prob_over_faltas_casa = self._prob_over_poisson(faltas_casa, linha_faltas_casa) * 100
         linha_faltas_fora = self._linha_media(faltas_fora)
         prob_over_faltas_fora = self._prob_over_poisson(faltas_fora, linha_faltas_fora) * 100
+
+        # Impedimentos — NOVO (17/08/2026). Por time + total combinado,
+        # mesmo padrão de chutes (por time) e escanteios (total).
+        linha_impedimentos_casa = self._linha_media(impedimentos_casa)
+        prob_over_impedimentos_casa = self._prob_over_poisson(impedimentos_casa, linha_impedimentos_casa) * 100
+        linha_impedimentos_fora = self._linha_media(impedimentos_fora)
+        prob_over_impedimentos_fora = self._prob_over_poisson(impedimentos_fora, linha_impedimentos_fora) * 100
+        impedimentos_total = round(impedimentos_casa + impedimentos_fora, 1)
+        linha_impedimentos_total = self._linha_media(impedimentos_total)
+        prob_over_impedimentos_total = self._prob_over_poisson(impedimentos_total, linha_impedimentos_total) * 100
 
         # Placar mais provável
         placar, prob_placar = self._placar_mais_provavel(matriz)
@@ -310,6 +342,15 @@ class MotorPoisson:
             prob_over_faltas_casa=round(prob_over_faltas_casa, 1),
             linha_faltas_fora=linha_faltas_fora,
             prob_over_faltas_fora=round(prob_over_faltas_fora, 1),
+            impedimentos_casa=round(impedimentos_casa, 1),
+            impedimentos_fora=round(impedimentos_fora, 1),
+            linha_impedimentos_casa=linha_impedimentos_casa,
+            prob_over_impedimentos_casa=round(prob_over_impedimentos_casa, 1),
+            linha_impedimentos_fora=linha_impedimentos_fora,
+            prob_over_impedimentos_fora=round(prob_over_impedimentos_fora, 1),
+            impedimentos_total=impedimentos_total,
+            linha_impedimentos_total=linha_impedimentos_total,
+            prob_over_impedimentos_total=round(prob_over_impedimentos_total, 1),
             placar_mais_provavel=placar,
             prob_placar_mais_provavel=round(prob_placar * 100, 1),
             odd_casa=_odd_justa(p_casa),
