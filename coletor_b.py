@@ -265,7 +265,7 @@ def salvar_estatisticas_partida(
     if not casa_nome or not fora_nome or not data_jogo:
         return
     try:
-        existe = supabase.table(TABELA_ESTATISTICAS_PARTIDAS).select("id") \
+        existe = supabase.table(TABELA_ESTATISTICAS_PARTIDAS).select("fixture_id") \
             .eq("casa_nome", casa_nome).eq("fora_nome", fora_nome).eq("data", data_jogo).execute()
 
         payload = {
