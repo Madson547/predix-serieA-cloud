@@ -18,6 +18,13 @@
 # pra uma JANELA DE DATAS (hoje ± N dias) — mais simples, sem
 # depender de detectar "qual rodada está em andamento".
 #
+# 21/08/2026 — adicionada recalcular_stats_temporada_b(), usada
+# exclusivamente pelo backfill_stats_completo.py. Motivo: esse
+# script ainda chamava buscar_numero_rodada_atual(), função do
+# modelo antigo (baseado em rodada) que não existe mais aqui —
+# quebrava com AttributeError toda vez que alguém tentava rodar
+# o backfill de Série B (ver histórico de execução de 21/08).
+#
 # IMPORTANTE — VERSÃO NOVA, AINDA NÃO VALIDADA EM PRODUÇÃO:
 # esse arquivo nunca rodou de verdade contra o cron real. Rode
 # primeiro via workflow_dispatch manual e confira o log com
@@ -529,6 +536,107 @@ def processar_janela():
         print(f"[AVISO] {len(sem_dado_esc_cart)} jogo(s) sem estatística confiável: {', '.join(sem_dado_esc_cart)}")
 
     salvar_jogos(jogos_pra_salvar)
+    _atualizar_stats_times(stats_por_time)
+
+
+# ==========================================================
+# BACKFILL — recalcula estatística da TEMPORADA INTEIRA
+# (usado só pelo backfill_stats_completo.py, workflow_dispatch)
+# ==========================================================
+
+def recalcular_stats_temporada_b():
+    """
+    Uso exclusivo do backfill manual (backfill_stats_completo.py).
+    Diferente de processar_janela() (rodado 2x/dia pelo cron, só toca
+    jogos dentro de ±10/15 dias), esta função varre TODOS os jogos já
+    encerrados da temporada inteira, sem filtro de data — recalculando
+    fin_/fing_/esc_/cart_/imped_ em times_b do zero, já com o piso de
+    sanidade atual.
+
+    Adicionada em 21/08/2026 porque o backfill_stats_completo.py ainda
+    chamava buscar_numero_rodada_atual(), função do modelo antigo
+    (baseado em rodada) que não existe mais neste arquivo — quebrava
+    com AttributeError toda vez que alguém tentava rodar o backfill de
+    Série B.
+
+    Não mexe em jogos_b nem em estatisticas_partidas_b diretamente
+    (isso já é feito rotineiramente pelo coletor diário via
+    processar_janela()); só recalcula a MÉDIA agregada por time em
+    times_b, usando o mesmo critério de sanidade já em produção.
+
+    CUSTO DE API: 1 chamada a /partidas/{id} por jogo já encerrado na
+    temporada inteira — pode facilmente passar de 100 chamadas (cota
+    do plano Free). Rodar só quando a cota tiver folga.
+    """
+    resumo = buscar_resumo_temporada()
+    if not resumo:
+        print("[BACKFILL-B] Não consegui buscar o resumo da temporada — abortando.")
+        return
+
+    stats_por_time = {}
+    processados = 0
+
+    for p in resumo:
+        if p.get("status") != "finalizado":
+            continue
+
+        partida_id = p.get("partida_id")
+        casa_nome = _normalizar_nome_time(p.get("time_mandante", {}).get("nome_popular", ""))
+        fora_nome = _normalizar_nome_time(p.get("time_visitante", {}).get("nome_popular", ""))
+
+        for nome in (casa_nome, fora_nome):
+            stats_por_time.setdefault(nome, {
+                "escanteios_casa": [], "escanteios_fora": [],
+                "cartoes_casa": [], "cartoes_fora": [],
+                "chutes_casa": [], "chutes_fora": [],
+                "chutes_gol_casa": [], "chutes_gol_fora": [],
+                "impedimentos_casa": [], "impedimentos_fora": [],
+            })
+
+        detalhe = buscar_detalhe_partida(partida_id)
+        time.sleep(0.2)
+        if not detalhe:
+            continue
+        processados += 1
+
+        est = detalhe.get("estatisticas", {})
+        est_m = est.get("mandante", {})
+        est_v = est.get("visitante", {})
+        m_confiavel = _lado_confiavel(est_m)
+        v_confiavel = _lado_confiavel(est_v)
+
+        esc_m = est_m.get("escanteios") if m_confiavel else None
+        esc_v = est_v.get("escanteios") if v_confiavel else None
+        imped_m = est_m.get("impedimentos") if m_confiavel else None
+        imped_v = est_v.get("impedimentos") if v_confiavel else None
+        fin_m = est_m.get("finalizacao", {}).get("total") if m_confiavel else None
+        fin_v = est_v.get("finalizacao", {}).get("total") if v_confiavel else None
+        fing_m = est_m.get("finalizacao", {}).get("no_gol") if m_confiavel else None
+        fing_v = est_v.get("finalizacao", {}).get("no_gol") if v_confiavel else None
+
+        cartoes = detalhe.get("cartoes", {}).get("amarelo", {})
+        cart_m = len(cartoes.get("mandante", [])) if m_confiavel else None
+        cart_v = len(cartoes.get("visitante", [])) if v_confiavel else None
+
+        fin_m = _aplicar_teto_piso(fin_m, MINIMO_SANIDADE_CHUTES, LIMITE_SANIDADE_CHUTES, casa_nome, "finalizacoes_total", partida_id)
+        fin_v = _aplicar_teto_piso(fin_v, MINIMO_SANIDADE_CHUTES, LIMITE_SANIDADE_CHUTES, fora_nome, "finalizacoes_total", partida_id)
+        fing_m = _aplicar_teto_piso(fing_m, 0, LIMITE_SANIDADE_CHUTES_GOL, casa_nome, "finalizacoes_no_gol", partida_id)
+        fing_v = _aplicar_teto_piso(fing_v, 0, LIMITE_SANIDADE_CHUTES_GOL, fora_nome, "finalizacoes_no_gol", partida_id)
+        imped_m = _aplicar_teto_piso(imped_m, 0, 15, casa_nome, "impedimentos", partida_id)
+        imped_v = _aplicar_teto_piso(imped_v, 0, 15, fora_nome, "impedimentos", partida_id)
+
+        if esc_m is not None: stats_por_time[casa_nome]["escanteios_casa"].append(esc_m)
+        if esc_v is not None: stats_por_time[fora_nome]["escanteios_fora"].append(esc_v)
+        if cart_m is not None: stats_por_time[casa_nome]["cartoes_casa"].append(cart_m)
+        if cart_v is not None: stats_por_time[fora_nome]["cartoes_fora"].append(cart_v)
+        if fin_m is not None: stats_por_time[casa_nome]["chutes_casa"].append(fin_m)
+        if fin_v is not None: stats_por_time[fora_nome]["chutes_fora"].append(fin_v)
+        if fing_m is not None: stats_por_time[casa_nome]["chutes_gol_casa"].append(fing_m)
+        if fing_v is not None: stats_por_time[fora_nome]["chutes_gol_fora"].append(fing_v)
+        if imped_m is not None: stats_por_time[casa_nome]["impedimentos_casa"].append(imped_m)
+        if imped_v is not None: stats_por_time[fora_nome]["impedimentos_fora"].append(imped_v)
+
+    print(f"[BACKFILL-B] {processados} jogo(s) encerrado(s) processado(s) na temporada inteira")
     _atualizar_stats_times(stats_por_time)
 
 
